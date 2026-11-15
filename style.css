@@ -1,0 +1,26 @@
+html, body {
+  margin: 0;
+  height: 100%;
+  background: #1b1410;
+  overflow: hidden;
+}
+
+/* The canvas fills the whole window. Its real pixel size is set in renderer.js. */
+#game {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+}
+
+/* Shown only if WebGL2 or a shader fails, so errors are visible on the page. */
+#error {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  margin: 0;
+  padding: 10px 14px;
+  background: #7a1f1f;
+  color: #ffffff;
+  font: 14px system-ui, sans-serif;
+  border-radius: 8px;
+}
