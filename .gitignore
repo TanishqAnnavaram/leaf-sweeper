@@ -4,3 +4,6 @@ node_modules/
 
 # AI process log: kept in the project folder, not published to GitHub
 AI-LOG.md
+
+.claude
+
