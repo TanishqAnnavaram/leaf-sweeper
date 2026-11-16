@@ -8,10 +8,18 @@ Browsers block ES modules when a page is opened as a plain file, so use a tiny l
 
 ```
 cd leaf-sweeper
-python3 -m http.server 8000
+python -m http.server 8000
 ```
 
-Then open http://localhost:8000 in your browser.
+Then open http://localhost:8000 in your browser. On macOS or Linux the command may be `python3` instead of `python`.
+
+## Tests
+
+```
+node tests/math.test.js
+```
+
+runs the math tests. With the local server running, http://localhost:8000/tests/ runs the math tests and the rendering tests in the browser.
 
 ## Structure
 
@@ -21,6 +29,9 @@ style.css         layout and look
 src/main.js       start-up
 src/renderer.js   WebGL setup and drawing
 src/shaders.js    GLSL shader code
+src/math.js       our own 3x3 matrix math (no WebGL)
+src/config.js     shared constants (world size, leaf size)
+tests/            test helper, math tests, rendering tests
 libs/             third-party libraries (none yet)
 ```
 
@@ -28,4 +39,5 @@ libs/             third-party libraries (none yet)
 
 - [x] Step 0: project skeleton, canvas clears to a color
 - [x] Step 1: shader helpers and one hard-coded triangle
-- [ ] Step 2 onward: see the build order
+- [x] Step 2: world-to-screen mapping, one leaf quad with position, rotation, scale
+- [ ] Step 3 onward: see the build order
