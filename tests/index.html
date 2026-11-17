@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Leaf Sweeper tests</title>
+  <link rel="icon" href="data:,">
+  <style>
+    body { margin: 16px; background: #1b1410; color: #f0e6da; font: 14px system-ui, sans-serif; }
+    h1 { font-size: 18px; }
+    #summary { font-weight: bold; margin: 12px 0; }
+    li { margin: 2px 0; }
+    .pass { color: #8fd18f; }
+    .fail { color: #ff8a8a; }
+    .message { color: #ffc9c9; margin-left: 24px; white-space: pre-wrap; }
+    /* The test canvases must be laid out to have a size, but they do not need to be seen. */
+    #canvases { height: 0; overflow: hidden; }
+  </style>
+</head>
+<body>
+  <h1>Leaf Sweeper tests</h1>
+  <p id="summary">Running...</p>
+  <ul id="results"></ul>
+  <div id="canvases"></div>
+
+  <script type="module">
+    import { getResults } from './harness.js';
+
+    const summary = document.querySelector('#summary');
+    const list = document.querySelector('#results');
+
+    try {
+      // Importing a test file runs its tests.
+      await import('./math.test.js');
+      await import('./render.test.js');
+    } catch (err) {
+      summary.textContent = 'Could not load the tests: ' + err.message;
+      summary.className = 'fail';
+      console.error(err);
+    }
+
+    const results = getResults();
+    let failed = 0;
+    for (const r of results) {
+      const item = document.createElement('li');
+      item.className = r.ok ? 'pass' : 'fail';
+      item.textContent = (r.ok ? 'PASS  ' : 'FAIL  ') + r.name;
+      if (!r.ok) {
+        failed++;
+        const message = document.createElement('div');
+        message.className = 'message';
+        message.textContent = r.message;
+        item.appendChild(message);
+      }
+      list.appendChild(item);
+    }
+    if (results.length > 0) {
+      summary.textContent = `${results.length - failed} of ${results.length} tests passed`;
+      summary.className = failed === 0 ? 'pass' : 'fail';
+    }
+    // Lets an automated check read the outcome.
+    window.testSummary = { total: results.length, failed };
+  </script>
+</body>
+</html>
