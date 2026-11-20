@@ -2,15 +2,17 @@ import { createRenderer } from './renderer.js';
 import {
   stepLeaf, spawnLeaves, createWind, createGusts, advanceGusts, removeFinished, windName,
 } from './physics.js';
-import { createGame, updateGame, addLeavesToGame, formatTime } from './game.js';
+import { createGame, updateGame, addLeavesToGame, formatTime, leavesToAdd } from './game.js';
+import { createWindControl, setPointer, stepWindControl, pointerToWorld } from './control.js';
 import { createNoise } from './noise.js';
 import { createLoop } from './loop.js';
 import { createFpsCounter } from './fps.js';
 import { createControls } from './ui.js';
 import {
-  LEAF_COUNT, LEAF_SEED, FRICTION, WIND_MAX_SPEED, WIND_START,
+  LEAF_COUNT, LEAF_SEED, FRICTION, WIND_MAX_SPEED,
   GUST_STRENGTH, GUST_SIZE, SPIN_AMOUNT, MAX_LEAVES,
   VOID_X, VOID_Y, VOID_RADIUS, CAPTURE_RADIUS, SUCTION_MAX, VOID_DISC_RADIUS,
+  AIM_GALE_DISTANCE, WIND_TURN_RATE, WIND_BUILD_TIME,
 } from './config.js';
 
 const canvas = document.querySelector('#game');
@@ -20,10 +22,14 @@ const statsBox = document.querySelector('#stats');
 const hudCount = document.querySelector('#hud-count');
 const hudFill = document.querySelector('#hud-fill');
 const hudTime = document.querySelector('#hud-time');
+const resetButton = document.querySelector('#reset');
+const addButton = document.querySelector('#add');
 const winCard = document.querySelector('#win');
 const winTime = document.querySelector('#win-time');
 const againButton = document.querySelector('#again');
 const moreButton = document.querySelector('#more');
+const compassArrow = document.querySelector('#compass-arrow');
+const compassLabel = document.querySelector('#compass-label');
 
 // Show a problem on the page as well as in the console.
 function showError(err) {
@@ -36,16 +42,20 @@ try {
   const renderer = createRenderer(canvas);
   let leaves = spawnLeaves(LEAF_COUNT, LEAF_SEED);   // 1000 still leaves, same layout every load
   let game = createGame(leaves.length);              // counter, timer, win
-  let round = 0;          // each Play again uses a new seed, so each round has a new layout
+  let round = 0;          // each reset uses a new seed, so each round has a new layout
   let extraBatches = 0;   // and so does each +100
   const fps = createFpsCounter();
   let shownStats = null;   // the report currently on screen
   let updateMs = 0;        // time the last update took
 
-  // Wind settings. The control panel's sliders change these values; update() reads them each frame.
+  // The player's wind control (step 8): hold on the field and the wind blows from the cursor to the void.
+  const control = createWindControl();
+
+  // Wind and tuning settings. The control writes bearing and speed every frame; the developer
+  // panel (press T) shows them and lets you change the tuning values.
   const settings = {
-    bearing: WIND_START.bearing,   // degrees the wind blows toward (0 = up, 90 = right)
-    speed: WIND_START.speed,       // world units per second, 0 = Calm
+    bearing: control.bearing,      // degrees the wind blows toward (0 = up, 90 = right)
+    speed: control.speed,          // world units per second, 0 = Calm
     friction: FRICTION,
     topSpeed: WIND_MAX_SPEED,
     gustStrength: GUST_STRENGTH,   // 0 = even wind (step 5), 1 = strongest gusts
@@ -54,14 +64,20 @@ try {
     suction: SUCTION_MAX,          // the void's pull at its center, units per second
     voidRadius: VOID_RADIUS,       // where the pull starts
     captureRadius: CAPTURE_RADIUS, // where leaves are caught
+    galeDistance: AIM_GALE_DISTANCE, // cursor distance from the void that gives a Gale
+    turnRate: WIND_TURN_RATE,      // how fast the wind can turn, degrees per second
+    buildTime: WIND_BUILD_TIME,    // how fast the wind builds up and dies down, seconds
   };
   const pane = createControls(settings);
+  pane.hidden = true;   // a developer panel: hidden until T is pressed
 
   // Gust state: our own Perlin noise (seeded, so gusts are the same on every load), the simulation
   // time, and the drift of the gust pattern. It only moves forward in update(), so pausing freezes it.
   const gusts = createGusts(createNoise(LEAF_SEED));
 
-  // Write the counter text. Called only when a new report arrives (every 0.5 s), not every frame,
+  // ---------- On-screen text ----------
+
+  // Write the FPS counter text. Called only when a new report arrives (every 0.5 s), not every frame,
   // because changing page text is slow compared with our drawing.
   function showStats(stats) {
     const lines = stats
@@ -76,9 +92,9 @@ try {
   }
   showStats(null);
 
-  // The counter, progress bar and timer at the bottom, and the win card. Page text is only
-  // rewritten when it changes (the timer about 10 times a second), not on every frame.
-  const shown = { count: '', time: '', fill: '' };
+  // The counter, progress bar, timer, buttons, compass, and win card. Page elements are only
+  // changed when what they show changes, not on every frame.
+  const shown = { count: '', time: '', fill: '', canAdd: null, compass: '', name: '' };
   function showHud() {
     const count = `Cleared ${game.cleared} / ${game.total}`;
     if (count !== shown.count) {
@@ -95,6 +111,28 @@ try {
       shown.fill = fill;
       hudFill.style.width = fill;
     }
+    // +100 is greyed out once the GPU buffer is full.
+    const canAdd = leavesToAdd(leaves.length, MAX_LEAVES) > 0;
+    if (canAdd !== shown.canAdd) {
+      shown.canAdd = canAdd;
+      addButton.disabled = !canAdd;
+      moreButton.disabled = !canAdd;
+    }
+    // Compass: the arrow points where the wind blows (SVG rotate is clockwise, like a compass bearing)
+    // and grows with the wind's strength. Calm shows a short, dim arrow.
+    const fraction = settings.topSpeed > 0 ? Math.min(1, settings.speed / settings.topSpeed) : 0;
+    const compass = `rotate(${Math.round(settings.bearing)}) scale(${(0.45 + 0.55 * fraction).toFixed(2)})`;
+    if (compass !== shown.compass) {
+      shown.compass = compass;
+      compassArrow.setAttribute('transform', compass);
+      compassArrow.style.opacity = settings.speed > 0 ? '1' : '0.35';
+    }
+    const name = windName(settings.speed, settings.topSpeed);
+    if (name !== shown.name) {
+      shown.name = name;
+      compassLabel.textContent = name;
+      settings.strength = name;   // the developer panel shows it too
+    }
     if (game.won && winCard.hidden) {
       winTime.textContent = `Your time: ${time}`;
       winCard.hidden = false;
@@ -103,38 +141,106 @@ try {
     }
   }
 
-  // Set the wind back to Calm and make the panel show it (code changes do not refresh it by themselves).
-  function calmWind() {
-    settings.speed = 0;
-    settings.strength = windName(0, settings.topSpeed);
-    pane.refresh();
-  }
+  // ---------- Reset Scene and +100 Leaves ----------
 
-  // Win card buttons.
-  againButton.addEventListener('click', () => {
+  // New round: a new layout, counter and timer back to 0, wind Calm and not held.
+  function resetScene() {
     round++;
     leaves = spawnLeaves(LEAF_COUNT, LEAF_SEED + round);
     game = createGame(leaves.length);   // cleared 0, timer 0, waits for the first wind again
-    calmWind();
+    setPointer(control, { holding: false });
+    control.speed = 0;
+    settings.speed = 0;
     showStats(shownStats);
-    againButton.blur();
-  });
-  moreButton.addEventListener('click', () => {
-    const count = Math.min(100, MAX_LEAVES - leaves.length);   // never more than the GPU buffer holds
+  }
+
+  // 100 more leaves (outside the void), at any time. The total grows and the timer keeps going.
+  function addLeaves() {
+    const count = leavesToAdd(leaves.length, MAX_LEAVES);   // never more than the GPU buffer holds
+    if (count === 0) {
+      return;
+    }
     extraBatches++;
     const extra = spawnLeaves(count, LEAF_SEED + 1000 + extraBatches);
     leaves.push(...extra);
-    addLeavesToGame(game, extra.length);   // bigger total, the round goes on, the timer continues
+    addLeavesToGame(game, extra.length);
     showStats(shownStats);
-    moreButton.blur();
+  }
+
+  // Buttons lose focus after a click, so a later Space or Enter does not press them again.
+  for (const [button, action] of [[resetButton, resetScene], [againButton, resetScene],
+    [addButton, addLeaves], [moreButton, addLeaves]]) {
+    button.addEventListener('click', () => {
+      action();
+      button.blur();
+    });
+  }
+
+  // ---------- Mouse and touch: hold to blow ----------
+  // Pointer Events cover mouse, touch and pen with one set of handlers. Only the canvas listens, so
+  // clicks on the buttons, the compass, or the panel never start the wind (they sit on top of it).
+
+  let activePointer = null;   // the pointer that is blowing (one at a time)
+
+  function aimAt(e) {
+    const [x, y] = pointerToWorld(e.clientX, e.clientY, canvas.getBoundingClientRect());
+    setPointer(control, { holding: true, x, y });
+  }
+
+  function release() {
+    activePointer = null;
+    setPointer(control, { holding: false });   // the wind dies down; the leaves coast to a stop
+  }
+
+  canvas.addEventListener('pointerdown', (e) => {
+    if (e.pointerType === 'mouse' && e.button !== 0) {
+      return;   // left button only
+    }
+    if (activePointer !== null) {
+      return;   // a second finger does not take over
+    }
+    activePointer = e.pointerId;
+    // Pointer capture: moves and the release still come to the canvas if the pointer leaves it.
+    // If the browser refuses (for example a pointer made by a script), blowing still works without it.
+    try {
+      canvas.setPointerCapture(e.pointerId);
+    } catch (err) {
+      // no capture: the wind stops if the pointer leaves the canvas, which is safe
+    }
+    aimAt(e);
+  });
+  canvas.addEventListener('pointermove', (e) => {
+    if (e.pointerId === activePointer) {
+      aimAt(e);
+    }
+  });
+  for (const type of ['pointerup', 'pointercancel', 'lostpointercapture']) {
+    canvas.addEventListener(type, (e) => {
+      if (e.pointerId === activePointer) {
+        release();
+      }
+    });
+  }
+  // Any interruption counts as a release, so the wind can never get stuck on.
+  window.addEventListener('blur', release);
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) {
+      release();
+    }
   });
 
-  // Every frame: move the leaves (unless paused), then draw them.
+  // ---------- Game loop ----------
+
+  // Every frame: steer the wind, move the leaves (unless paused), then draw them.
   // "Work" is the time our own code takes: update + packing + upload + draw call.
   // It does not include the GPU's drawing time, which runs in parallel after the call returns.
   const callbacks = {
     update(dt) {
       const t0 = performance.now();
+      // The control moves the real wind toward what the pointer asks for (limited turn, smooth build).
+      stepWindControl(control, dt, settings);
+      settings.bearing = control.bearing;
+      settings.speed = control.speed;
       const wind = createWind(settings, gusts);   // once per frame, shared by every leaf
       for (const leaf of leaves) {
         stepLeaf(leaf, dt, wind);   // each leaf reads its own gust from the noise inside stepLeaf
@@ -162,10 +268,10 @@ try {
   };
   const loop = createLoop(callbacks);
 
-  // P pauses and unpauses, F hides and shows the counter.
-  // e.repeat is true while a key is held down, so holding a key toggles only once.
+  // ---------- Keys ----------
+  // P pauses, F shows or hides the FPS counter, T the developer panel, R resets the scene.
   window.addEventListener('keydown', (e) => {
-    // Ignore held keys, and keys typed into a text box (Tweakpane has number boxes).
+    // Ignore held keys, and keys typed into a text box (the developer panel has number boxes).
     if (e.repeat || (e.target instanceof HTMLElement && e.target.closest('input, textarea'))) {
       return;
     }
@@ -173,6 +279,10 @@ try {
       pausedLabel.hidden = !loop.togglePaused();
     } else if (e.code === 'KeyF') {
       statsBox.hidden = !statsBox.hidden;
+    } else if (e.code === 'KeyT') {
+      pane.hidden = !pane.hidden;
+    } else if (e.code === 'KeyR') {
+      resetScene();
     }
   });
 
@@ -184,7 +294,8 @@ try {
   //   leafDebug.reset()            back to the normal 1000 leaves
   //   leafDebug.count()            how many leaves there are
   //   leafDebug.getLeaf(0)         a copy of one leaf's values
-  //   leafDebug.wind               the live wind settings (change them here or in the panel)
+  //   leafDebug.wind               the live wind settings (bearing and speed are set by the control)
+  //   leafDebug.aim(-800, 450)     hold the "mouse" at a world point; leafDebug.release() lets go
   //   leafDebug.gusts              the gust state: simulation time and drift
   //   leafDebug.game               the game state: cleared, total, time, won
   //   leafDebug.leaveOnly(5)       keep 5 leaves, placed near the void (to test the win quickly)
@@ -207,6 +318,14 @@ try {
       return leaves[i] ? { ...leaves[i] } : null;   // a copy, so the console cannot change it by accident
     },
     wind: settings,
+    control,
+    aim(x, y) {
+      setPointer(control, { holding: true, x, y });
+      return control.holding;
+    },
+    release() {
+      release();
+    },
     gusts,
     get game() {
       return game;

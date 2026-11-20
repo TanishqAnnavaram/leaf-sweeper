@@ -67,3 +67,13 @@ export const SUCTION_SWIRL = 0.3;     // sideways (counterclockwise) part of the
 export const CAPTURE_TIME = 0.6;      // seconds a caught leaf takes to spiral in, shrink, and fade
 export const CAPTURE_TURNS = 1;       // how many times a caught leaf circles the center on the way in
 export const VOID_DISC_RADIUS = 40;   // size of the dark disc drawn at the center (gray-box look)
+
+// Step 8: mouse-aim wind. While the mouse button (or a finger) is held on the field, the wind blows
+// from the cursor toward the void. Its strength grows with the cursor's distance from the void:
+// Calm within AIM_CALM_RADIUS, rising in a straight line to the top speed at AIM_GALE_DISTANCE.
+export const AIM_CALM_RADIUS = 40;      // world units (the size of the void's dark disc)
+export const AIM_GALE_DISTANCE = 600;   // world units
+// The real wind follows the aim smoothly: it turns at most WIND_TURN_RATE degrees per second, and its
+// speed approaches the aim's speed with time constant WIND_BUILD_TIME (63% of the way after that time).
+export const WIND_TURN_RATE = 180;      // degrees per second
+export const WIND_BUILD_TIME = 0.3;     // seconds

@@ -61,3 +61,13 @@ export function formatTime(seconds) {
   const tenth = tenths % 10;
   return `${minutes}:${String(secs).padStart(2, '0')}.${tenth}`;
 }
+
+// How many leaves "+100 Leaves" may add: up to `want`, but never past `max` (the GPU buffer size).
+// Bad numbers give 0, never a negative or NaN count.
+export function leavesToAdd(current, max, want = 100) {
+  // A leaf count or limit below 0 cannot happen, so it is treated as broken input too.
+  if (!isNumber(current) || !isNumber(max) || !isNumber(want) || current < 0 || max < 0) {
+    return 0;
+  }
+  return Math.max(0, Math.min(Math.floor(want), Math.floor(max - current)));
+}

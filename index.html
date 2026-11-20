@@ -19,6 +19,21 @@
     <span id="hud-count">Cleared 0 / 0</span>
     <div id="hud-bar"><div id="hud-fill"></div></div>
     <span id="hud-time">0:00.0</span>
+    <button id="reset" type="button" title="New layout, timer back to 0 (R)">Reset</button>
+    <button id="add" type="button" title="Add 100 leaves">+100</button>
+  </div>
+  <!-- Wind compass, bottom right: shows the wind, does not control it -->
+  <div id="compass" aria-label="Wind direction and strength">
+    <svg viewBox="-50 -50 100 100" width="88" height="88" aria-hidden="true">
+      <circle r="46" class="dial"/>
+      <text y="-35" class="north">N</text>
+      <!-- The arrow points up (bearing 0); main.js rotates and scales it. -->
+      <g id="compass-arrow">
+        <line x1="0" y1="22" x2="0" y2="-22"/>
+        <polygon points="0,-32 -8,-18 8,-18"/>
+      </g>
+    </svg>
+    <div id="compass-label">Calm</div>
   </div>
   <!-- Win card, shown when every leaf is cleared -->
   <div id="win" hidden>

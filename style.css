@@ -10,6 +10,8 @@ html, body {
   display: block;
   width: 100vw;
   height: 100vh;
+  cursor: crosshair;     /* hold the mouse button on the field to blow (step 8) */
+  touch-action: none;    /* on phones, a finger on the field blows instead of scrolling or zooming */
 }
 
 /* Shown only if WebGL2 or a shader fails, so errors are visible on the page. */
@@ -145,4 +147,68 @@ html, body {
 
 #win button:hover {
   background: #f2b878;
+}
+
+/* Step 8: Reset and +100 buttons at the right end of the bottom bar. The bar lets clicks through,
+   but the buttons must catch them. */
+#hud button {
+  pointer-events: auto;
+  padding: 4px 10px;
+  font: 13px system-ui, sans-serif;
+  color: #1b1410;
+  background: #e8a25c;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+#hud button:hover:not(:disabled) {
+  background: #f2b878;
+}
+
+#hud button:disabled,
+#win button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Wind compass, bottom right. It catches clicks (so clicking it never blows) but does nothing with them. */
+#compass {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  padding: 6px 6px 4px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #f0e6da;
+  font: 12px system-ui, sans-serif;
+  text-align: center;
+  border-radius: 12px;
+  user-select: none;
+}
+
+#compass svg {
+  display: block;
+}
+
+#compass .dial {
+  fill: none;
+  stroke: rgba(240, 230, 218, 0.35);
+  stroke-width: 2;
+}
+
+#compass .north {
+  fill: rgba(240, 230, 218, 0.6);
+  font: 10px system-ui, sans-serif;
+  text-anchor: middle;
+  dominant-baseline: middle;
+}
+
+#compass-arrow line {
+  stroke: #e8a25c;
+  stroke-width: 5;
+  stroke-linecap: round;
+}
+
+#compass-arrow polygon {
+  fill: #e8a25c;
 }

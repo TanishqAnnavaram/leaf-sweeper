@@ -1,7 +1,7 @@
-// Step 7 game state tests: counter, timer, win. Run with:  node tests/game.test.js
+// Game state tests (steps 7 and 8): counter, timer, win, adding leaves. Run with:  node tests/game.test.js
 
 import { test, assert, assertClose, report } from './harness.js';
-import { createGame, updateGame, addLeavesToGame, formatTime } from '../src/game.js';
+import { createGame, updateGame, addLeavesToGame, formatTime, leavesToAdd } from '../src/game.js';
 
 // One frame of the game: dt seconds, the wind speed, leaves removed this frame, leaves left.
 function frame(game, { dt = 1 / 60, windSpeed = 0, removed = 0, remaining }) {
@@ -107,6 +107,33 @@ test('formatTime: 0:00.0, 1:23.4, 61:05.0, 0:59.9, and NaN or negative gives 0:0
     [NaN, '0:00.0'], [-3, '0:00.0'], [Infinity, '0:00.0']];
   for (const [seconds, text] of cases) {
     assert(formatTime(seconds) === text, `${seconds}: expected ${text}, got ${formatTime(seconds)}`);
+  }
+});
+
+// ---------- Step 8: Reset Scene and +100 Leaves ----------
+
+test('Reset Scene gives a fresh game: 0 cleared, time 0, waiting for the first wind', () => {
+  const g = createGame(10);
+  frame(g, { windSpeed: 100, dt: 1 / 30, removed: 4, remaining: 6 });
+  const fresh = createGame(1000);   // what Reset Scene does with the new leaves
+  assert(fresh.cleared === 0 && fresh.time === 0 && !fresh.started && !fresh.won && fresh.total === 1000,
+    JSON.stringify(fresh));
+});
+
+test('leavesToAdd gives 100 when there is room', () => {
+  assert(leavesToAdd(1000, 10000) === 100, `${leavesToAdd(1000, 10000)}`);
+});
+
+test('leavesToAdd near the limit adds only what fits, and 0 at the limit', () => {
+  assert(leavesToAdd(9950, 10000) === 50, `${leavesToAdd(9950, 10000)}`);
+  assert(leavesToAdd(10000, 10000) === 0, `${leavesToAdd(10000, 10000)}`);
+  assert(leavesToAdd(12000, 10000) === 0, `${leavesToAdd(12000, 10000)}`);
+});
+
+test('leavesToAdd with bad numbers gives 0, never negative or NaN', () => {
+  for (const [current, max] of [[NaN, 100], [10, NaN], [-5, -1], [undefined, 100]]) {
+    const n = leavesToAdd(current, max);
+    assert(n === 0, `(${current}, ${max}) gave ${n}`);
   }
 });
 
