@@ -1,10 +1,12 @@
-// Step 2 rendering tests. These need a real browser with WebGL2, so they only run from tests/index.html.
+// Rendering tests (steps 2 and 3). These need a real browser with WebGL2, so they only run from tests/index.html.
 // Each test draws into a hidden-size canvas, then reads pixels back and checks their color.
 
 import { test, assert } from './harness.js';
 import { createRenderer } from '../src/renderer.js';
 import { projection, transformPoint } from '../src/math.js';
 import { WORLD_WIDTH, WORLD_HEIGHT } from '../src/config.js';
+import { createLeaf, stepLeaf } from '../src/physics.js';
+import { createLoop } from '../src/loop.js';
 
 const ORANGE = [217, 102, 26];   // leaf color (0.85, 0.40, 0.10) as 0-255 values
 const GROUND = [28, 20, 15];     // ground color (0.11, 0.08, 0.06)
@@ -152,4 +154,27 @@ test('render: no WebGL errors after drawing', () => {
   const d = draw(800, 450, { x: 10, y: 20, angle: 1, scale: 1.5 });
   const gl = d.renderer.gl;
   assert(gl.getError() === gl.NO_ERROR, 'gl.getError() reported a problem');
+});
+
+// ---------- Step 3: the game loop drives the drawing ----------
+
+test('render: the loop moves the leaf on screen between frames', () => {
+  const canvas = makeCanvas(800, 450);
+  const renderer = createRenderer(canvas);
+  const leaf = createLeaf({ x: -200, y: 0, vx: 600, vy: 0, angle: 0, scale: 1 });
+  const loop = createLoop({
+    update: (dt) => stepLeaf(leaf, dt),
+    render() { renderer.setLeaf(leaf); renderer.render(); },
+  });
+  const at = (x, y) => pixelAtWorld(renderer, canvas, x, y);
+
+  loop.tick(0);   // first frame: dt 0, leaf drawn at its start
+  assertColor(at(-200, 0), ORANGE, 'first frame, leaf at x = -200');
+  assertColor(at(-140, 0), GROUND, 'first frame, x = -140 is still empty');
+
+  // Three 30 Hz frames: 3 * (1/30 s) * 600 units/s = 60 units to the right.
+  for (let i = 1; i <= 3; i++) loop.tick(i * (1000 / 30));
+  assertColor(at(-140, 0), ORANGE, 'after 3 frames, leaf at x = -140');
+  assertColor(at(-200, 0), GROUND, 'after 3 frames, old spot is empty');
+  assert(renderer.gl.getError() === renderer.gl.NO_ERROR, 'gl.getError() reported a problem');
 });

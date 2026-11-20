@@ -17,21 +17,31 @@ Then open http://localhost:8000 in your browser. On macOS or Linux the command m
 
 ```
 node tests/math.test.js
+node tests/physics.test.js
+node tests/loop.test.js
 ```
 
-runs the math tests. With the local server running, http://localhost:8000/tests/ runs the math tests and the rendering tests in the browser.
+run the math, physics, and game loop tests. With the local server running, http://localhost:8000/tests/ runs all of them plus the rendering tests in the browser.
+
+## Controls
+
+- `P`: pause and unpause the simulation.
+
+In the browser console, `leafDebug.setLeaf({ x, y, vx, vy, angle, scale })`, `leafDebug.getLeaf()`, and `leafDebug.reset()` move, read, and relaunch the leaf.
 
 ## Structure
 
 ```
 index.html        page and canvas
 style.css         layout and look
-src/main.js       start-up
+src/main.js       start-up, pause key, debug handle
+src/loop.js       game loop with a clamped time step (no WebGL)
+src/physics.js    leaf movement and world edges (no WebGL)
 src/renderer.js   WebGL setup and drawing
 src/shaders.js    GLSL shader code
 src/math.js       our own 3x3 matrix math (no WebGL)
-src/config.js     shared constants (world size, leaf size)
-tests/            test helper, math tests, rendering tests
+src/config.js     shared constants (world size, leaf size, time step, start values)
+tests/            test helper, math, physics, loop, and rendering tests
 libs/             third-party libraries (none yet)
 ```
 
@@ -40,4 +50,5 @@ libs/             third-party libraries (none yet)
 - [x] Step 0: project skeleton, canvas clears to a color
 - [x] Step 1: shader helpers and one hard-coded triangle
 - [x] Step 2: world-to-screen mapping, one leaf quad with position, rotation, scale
-- [ ] Step 3 onward: see the build order
+- [x] Step 3: game loop with a time step, one leaf at constant velocity
+- [ ] Step 4 onward: see the build order

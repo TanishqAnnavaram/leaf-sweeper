@@ -32,6 +32,8 @@
     try {
       // Importing a test file runs its tests.
       await import('./math.test.js');
+      await import('./physics.test.js');
+      await import('./loop.test.js');
       await import('./render.test.js');
     } catch (err) {
       summary.textContent = 'Could not load the tests: ' + err.message;
