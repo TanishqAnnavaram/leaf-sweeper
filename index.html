@@ -14,6 +14,23 @@
   <p id="paused" hidden>Paused (press P)</p>
   <!-- FPS counter (press F to hide or show) -->
   <pre id="stats"></pre>
+  <!-- Counter, progress bar and timer, bottom center -->
+  <div id="hud">
+    <span id="hud-count">Cleared 0 / 0</span>
+    <div id="hud-bar"><div id="hud-fill"></div></div>
+    <span id="hud-time">0:00.0</span>
+  </div>
+  <!-- Win card, shown when every leaf is cleared -->
+  <div id="win" hidden>
+    <div class="card">
+      <h2>All clear!</h2>
+      <p id="win-time"></p>
+      <div class="buttons">
+        <button id="again" type="button">Play again</button>
+        <button id="more" type="button">+100 leaves</button>
+      </div>
+    </div>
+  </div>
   <!-- type="module" lets our files import each other (needs a local server, see README) -->
   <script type="module" src="./src/main.js"></script>
 </body>

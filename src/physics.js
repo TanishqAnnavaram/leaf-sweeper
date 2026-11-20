@@ -3,15 +3,17 @@
 // Step 4: spawning many leaves at random (seeded) places.
 // Step 5: wind and ground drag.
 // Step 6: noise gusts and tumbling.
+// Step 7: the void (suction, capture, removal).
 
 import {
   WORLD_WIDTH, WORLD_HEIGHT, LEAF_WIDTH, LEAF_HEIGHT, MAX_DT, LEAF_START,
   MAX_LEAVES, LEAF_SEED, LEAF_SCALE_MIN, LEAF_SCALE_MAX, WIND_MAX_SPEED,
   GUST_MAX_TURN, GUST_EVOLVE, SPIN_RESPONSE, SPIN_FACTOR_MIN, SPIN_FACTOR_MAX,
+  VOID_X, VOID_Y, VOID_RADIUS, SUCTION_SWIRL, CAPTURE_TIME, CAPTURE_TURNS,
 } from './config.js';
 import { createRandom } from './random.js';
 
-const KEYS = ['x', 'y', 'vx', 'vy', 'angle', 'scale', 'spin', 'spinFactor'];
+const KEYS = ['x', 'y', 'vx', 'vy', 'angle', 'scale', 'spin', 'spinFactor', 'fade'];
 const TWO_PI = 2 * Math.PI;
 
 function isNumber(value) {
@@ -55,9 +57,14 @@ export function leafRadius(scale) {
 //   gustStrength  0 to 1: how much gusts change the speed (0 = even wind, as in step 5)
 //   gustSize      world units across one gust patch
 //   spinAmount    how much moving leaves tumble (0 = no spin)
+//   suction       the void's pull at its center, in world units per second (0 = no pull)
+//   voidRadius    attraction radius: no pull farther than this from the void
+//   captureRadius a leaf closer than this to the void is caught (0 = never)
 // `gusts` (optional) is the gust state from createGusts: the noise function, the time, the drift.
-// Returns { vx, vy, friction, gustStrength, gustSize, gusts, spinAmount }, every value safe to use.
-export function createWind({ bearing, speed, friction, gustStrength, gustSize, spinAmount } = {}, gusts) {
+// Returns the same names plus { gusts }, every value safe to use. Settings left out are switched off.
+export function createWind({
+  bearing, speed, friction, gustStrength, gustSize, spinAmount, suction, voidRadius, captureRadius,
+} = {}, gusts) {
   const safeFriction = isNumber(friction) && friction > 0 ? friction : 0;
   let vx = 0;
   let vy = 0;
@@ -80,6 +87,9 @@ export function createWind({ bearing, speed, friction, gustStrength, gustSize, s
     gustSize: size,
     gusts: useGusts ? gusts : null,
     spinAmount: isNumber(spinAmount) && spinAmount > 0 ? spinAmount : 0,
+    suction: isNumber(suction) && suction > 0 ? suction : 0,
+    voidRadius: isNumber(voidRadius) && voidRadius > 0 ? voidRadius : 0,
+    captureRadius: isNumber(captureRadius) && captureRadius > 0 ? captureRadius : 0,
   };
 }
 
@@ -167,6 +177,11 @@ export function stepLeaf(leaf, dt, wind) {
   if (!isNumber(leaf.x)) leaf.x = 0;
   if (!isNumber(leaf.y)) leaf.y = 0;
 
+  // A caught leaf no longer feels wind or walls: it only plays its spiral into the void.
+  if (leaf.captured) {
+    return stepCaptured(leaf, dt);
+  }
+
   const f = wind && isNumber(wind.friction) && wind.friction > 0 ? wind.friction : 0;
   if (f > 0) {
     // Wind and drag together. The pitch's two formulas,
@@ -180,9 +195,11 @@ export function stepLeaf(leaf, dt, wind) {
     // always between 0 and 1, so drag can never flip a leaf backwards.
     // This leaf's own wind (the base wind changed by gusts at its position). It is held fixed
     // for the step, so the exact solution below still applies.
+    // Plus the void's pull, which works the same way: a speed the leaf heads toward.
     const own = leafWind(wind, leaf.x, leaf.y);
-    const wx = own.vx;
-    const wy = own.vy;
+    const pull = suctionAt(wind, leaf.x, leaf.y);
+    const wx = own.vx + pull.vx;
+    const wy = own.vy + pull.vy;
     const decay = Math.exp(-f * dt);
     // Position, also exact: the integral of v(t) over the step,
     //   x_new = x + W * dt + (v - W) * (1 - e^(-f * dt)) / f      (f > 0, so no divide by zero)
@@ -240,13 +257,23 @@ export function stepLeaf(leaf, dt, wind) {
     if (a < 0) a += TWO_PI;
     if (!(a < TWO_PI)) a = 0;   // a + 2 pi can round up to exactly 2 pi
     leaf.angle = a;
+
+    // Caught by the void? (Step 7.) Checked after the move, so a leaf that just arrived is caught.
+    if (wind.captureRadius > 0) {
+      const dx = leaf.x - VOID_X;
+      const dy = leaf.y - VOID_Y;
+      if (dx * dx + dy * dy < wind.captureRadius * wind.captureRadius) {
+        startCapture(leaf);
+      }
+    }
   }
   return leaf;
 }
 
 // Make `count` still leaves at random places, each fully inside the world.
 // The same seed always gives the same layout.
-export function spawnLeaves(count, seed = LEAF_SEED) {
+// Leaves never start inside `avoidRadius` of the void, so nothing is pulled in before the player acts.
+export function spawnLeaves(count, seed = LEAF_SEED, avoidRadius = VOID_RADIUS) {
   // A bad count (NaN, Infinity, text, negative) gives no leaves. A decimal is rounded down.
   let n = (typeof count === 'number' && Number.isFinite(count)) ? Math.floor(count) : 0;
   n = Math.max(0, Math.min(n, MAX_LEAVES));
@@ -263,13 +290,123 @@ export function spawnLeaves(count, seed = LEAF_SEED) {
     const maxX = Math.max(0, WORLD_WIDTH / 2 - r);
     const maxY = Math.max(0, WORLD_HEIGHT / 2 - r);
     // random() is in [0, 1), so (2 * random() - 1) is in [-1, 1): a position from -max to max.
-    const x = (2 * random() - 1) * maxX;
-    const y = (2 * random() - 1) * maxY;
+    // Try again while the spot is inside the void's radius (about 10% of the world). After 100 tries
+    // (only possible with a huge radius) the last spot is used, so the loop always ends.
+    const avoid = isNumber(avoidRadius) && avoidRadius > 0 ? avoidRadius : 0;
+    let x = 0;
+    let y = 0;
+    for (let attempt = 0; attempt < 100; attempt++) {
+      x = (2 * random() - 1) * maxX;
+      y = (2 * random() - 1) * maxY;
+      if (Math.hypot(x - VOID_X, y - VOID_Y) >= avoid) break;
+    }
     const angle = random() * 2 * Math.PI;   // any direction, [0, 2 pi)
     // Spin direction (half clockwise, half counterclockwise) and strength.
     const direction = spinRandom() < 0.5 ? -1 : 1;
     const spinFactor = direction * (SPIN_FACTOR_MIN + (SPIN_FACTOR_MAX - SPIN_FACTOR_MIN) * spinRandom());
-    leaves.push(createLeaf({ x, y, vx: 0, vy: 0, angle, scale, spin: 0, spinFactor }));
+    leaves.push(createLeaf({ x, y, vx: 0, vy: 0, angle, scale, spin: 0, spinFactor, fade: 1 }));
   }
   return leaves;
+}
+
+// ---------- Step 7: the void ----------
+
+// The void's pull on a leaf at (x, y), as a velocity the leaf heads toward (like the wind).
+//   d = distance to the void's center
+//   inward speed  = suction * (1 - d / R)      0 at the edge R, full strength at the center
+//   swirl speed   = SUCTION_SWIRL * inward    sideways, counterclockwise, so leaves circle in
+// Outside R there is no pull.
+export function suctionAt(wind, x, y) {
+  if (!wind || !(wind.suction > 0) || !(wind.voidRadius > 0) || !isNumber(x) || !isNumber(y)) {
+    return { vx: 0, vy: 0 };
+  }
+  const dx = x - VOID_X;
+  const dy = y - VOID_Y;
+  const d = Math.hypot(dx, dy);
+  // Minimum-distance guard: at (or extremely near) the center the direction (dx / d) is undefined,
+  // because it would divide by zero. A leaf there is caught anyway, so it needs no pull.
+  if (d >= wind.voidRadius || d < 1e-9) {
+    return { vx: 0, vy: 0 };
+  }
+  const inward = wind.suction * (1 - d / wind.voidRadius);
+  const ux = -dx / d;   // unit vector from the leaf toward the center
+  const uy = -dy / d;
+  const swirl = SUCTION_SWIRL * inward;
+  // Counterclockwise around the center is the position direction turned by +90 degrees: (-dy, dx) / d.
+  const tx = -dy / d;
+  const ty = dx / d;
+  return { vx: ux * inward + tx * swirl, vy: uy * inward + ty * swirl };
+}
+
+// Start a leaf's capture: remember where it was (as a distance and an angle around the center)
+// and its size, so the spiral and the shrink can be worked out from there.
+function startCapture(leaf) {
+  const dx = leaf.x - VOID_X;
+  const dy = leaf.y - VOID_Y;
+  leaf.captured = true;
+  leaf.done = false;
+  leaf.captureT = 0;                       // seconds since capture
+  leaf.captureR0 = Math.hypot(dx, dy);     // distance at capture
+  leaf.captureA0 = Math.atan2(dy, dx);     // angle around the center at capture
+  leaf.captureScale0 = isNumber(leaf.scale) ? leaf.scale : 1;
+  leaf.vx = 0;
+  leaf.vy = 0;
+}
+
+// One step of a caught leaf. With p = progress from 0 to 1 over CAPTURE_TIME seconds:
+//   distance = r0 * (1 - p)                     straight in, so it gets closer every frame
+//   angle around the center = a0 + turns * 2 pi * p   it circles while it falls in (a spiral)
+//   scale = scale0 * (1 - p),  fade = 1 - p      shrink and fade together
+// At p = 1 the leaf is marked done; removeFinished then takes it out of the list.
+function stepCaptured(leaf, dt) {
+  leaf.captureT = (isNumber(leaf.captureT) ? leaf.captureT : 0) + dt;
+  // The small 1e-9 makes 36 steps of 1/60 s count as the full 0.6 s despite rounding.
+  const p = Math.min(1, leaf.captureT / CAPTURE_TIME + 1e-9);
+  const r0 = isNumber(leaf.captureR0) ? leaf.captureR0 : 0;
+  const a0 = isNumber(leaf.captureA0) ? leaf.captureA0 : 0;
+  const s0 = isNumber(leaf.captureScale0) ? leaf.captureScale0 : 1;
+  const r = r0 * (1 - p);
+  const a = a0 + CAPTURE_TURNS * TWO_PI * p;
+  leaf.x = VOID_X + r * Math.cos(a);
+  leaf.y = VOID_Y + r * Math.sin(a);
+  leaf.vx = 0;
+  leaf.vy = 0;
+  leaf.scale = p >= 1 ? 0 : s0 * (1 - p);
+  leaf.fade = p >= 1 ? 0 : 1 - p;
+  // Spin faster and faster as it falls in (in the leaf's own spin direction).
+  const direction = isNumber(leaf.spinFactor) && leaf.spinFactor < 0 ? -1 : 1;
+  leaf.angle = (isNumber(leaf.angle) ? leaf.angle : 0) + direction * (4 + 20 * p) * dt;
+  let wrapped = leaf.angle % TWO_PI;
+  if (wrapped < 0) wrapped += TWO_PI;
+  leaf.angle = wrapped < TWO_PI ? wrapped : 0;
+  if (p >= 1) {
+    leaf.done = true;
+  }
+  return leaf;
+}
+
+// Take every finished (done) leaf out of the list, in place, and return how many were removed.
+// "Swap-and-pop": move the last leaf into the gap, then shorten the list by one. Each removal is
+// constant time (no shifting of all the leaves after it, as splice would do), so a whole pass is O(n).
+// The order of the leaves changes, which does not matter for drawing or physics.
+export function removeFinished(leaves) {
+  if (!Array.isArray(leaves)) {
+    return 0;
+  }
+  let removed = 0;
+  let i = 0;
+  while (i < leaves.length) {
+    const leaf = leaves[i];
+    if (leaf && leaf.done) {
+      const last = leaves.pop();      // take the last leaf off the end
+      if (i < leaves.length) {
+        leaves[i] = last;             // and put it where the finished leaf was
+      }
+      removed++;
+      // Do not move i on: the leaf just moved into slot i has not been checked yet.
+    } else {
+      i++;
+    }
+  }
+  return removed;
 }

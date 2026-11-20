@@ -19,7 +19,7 @@ export const MAX_DT = 1 / 30;
 // velocity in world units per second, angle in radians, scale (1 = normal size).
 // Frozen so no code can change it by accident.
 export const LEAF_START = Object.freeze({
-  x: -600, y: -300, vx: 200, vy: 120, angle: 0, scale: 1, spin: 0, spinFactor: 0,
+  x: -600, y: -300, vx: 200, vy: 120, angle: 0, scale: 1, spin: 0, spinFactor: 0, fade: 1,
 });
 
 // Step 4: many leaves, drawn with one instanced draw call.
@@ -54,3 +54,16 @@ export const SPIN_AMOUNT = 0.5;
 export const SPIN_RESPONSE = 4;       // how fast the spin catches up with its target, per second
 export const SPIN_FACTOR_MIN = 0.3;   // each leaf gets a random spin factor in this range, and a random direction
 export const SPIN_FACTOR_MAX = 1.0;
+
+// Step 7: the void.
+export const VOID_X = 0;              // the void sits at the center of the world
+export const VOID_Y = 0;
+export const VOID_RADIUS = 220;       // attraction radius: the pull starts here, in world units
+export const CAPTURE_RADIUS = 30;     // a leaf closer than this to the center is caught
+// The pull is a speed toward the center, like the wind speed: SUCTION_MAX * (1 - d / VOID_RADIUS),
+// so 0 at the edge and 500 units/s at the center (more than a Gale, so the middle always wins).
+export const SUCTION_MAX = 500;
+export const SUCTION_SWIRL = 0.3;     // sideways (counterclockwise) part of the pull, as a fraction of it
+export const CAPTURE_TIME = 0.6;      // seconds a caught leaf takes to spiral in, shrink, and fade
+export const CAPTURE_TURNS = 1;       // how many times a caught leaf circles the center on the way in
+export const VOID_DISC_RADIUS = 40;   // size of the dark disc drawn at the center (gray-box look)

@@ -1,4 +1,4 @@
-// Rendering tests (steps 2 to 5). These need a real browser with WebGL2, so they only run from tests/index.html.
+// Rendering tests (steps 2 to 7). These need a real browser with WebGL2, so they only run from tests/index.html.
 // Each test draws into a hidden-size canvas, then reads pixels back and checks their color.
 
 import { test, assert } from './harness.js';
@@ -350,4 +350,90 @@ test('render: wind blowing right moves a leaf right on screen', () => {
   assert(leaf.x > -200 + 150, `leaf only reached x = ${leaf.x}`);
   assertLeafColor(pixelAtWorld(renderer, canvas, leaf.x, 0), 'leaf at its new position');
   assertColor(pixelAtWorld(renderer, canvas, -200, 0), GROUND, 'old position is empty');
+});
+
+// ---------- Step 7: the void and fading ----------
+
+const VOID = { x: 0, y: 0, discRadius: 40, ringRadius: 220 };
+
+function drawWithVoid(leaves, voidSettings = VOID) {
+  const canvas = makeCanvas(800, 450);
+  const renderer = createRenderer(canvas);
+  const counts = countDraws(renderer.gl);
+  renderer.setVoid(voidSettings);
+  renderer.setLeaves(leaves);
+  renderer.render();
+  return { canvas, renderer, counts, at: (x, y) => pixelAtWorld(renderer, canvas, x, y) };
+}
+
+function brightness(c) {
+  return c[0] + c[1] + c[2];
+}
+
+test('render: the void disc is dark at the center, ground between disc and ring', () => {
+  const d = drawWithVoid([]);
+  assert(brightness(d.at(0, 0)) < brightness(GROUND) - 20, `center (${d.at(0, 0)}) is not darker than the ground`);
+  assert(brightness(d.at(30, 0)) < brightness(GROUND) - 20, `inside the disc (${d.at(30, 0)})`);
+  assertColor(d.at(120, 0), GROUND, 'between the disc and the ring');
+  assertColor(d.at(400, 0), GROUND, 'outside the ring');
+});
+
+test('render: the ring shows at radius 220', () => {
+  const d = drawWithVoid([]);
+  let brightest = 0;
+  for (let r = 214; r <= 226; r += 1) brightest = Math.max(brightest, brightness(d.at(r, 0)));
+  assert(brightest > brightness(GROUND) + 15, `ring not visible: brightest ${brightest}`);
+});
+
+test('render: leaves draw over the void', () => {
+  const d = drawWithVoid([{ x: 0, y: 0, angle: 0, scale: 1, fade: 1 }]);
+  assertLeafColor(d.at(0, 0), 'leaf over the void');
+});
+
+test('render: void plus leaves is one plain draw call and one instanced call', () => {
+  const d = drawWithVoid([{ x: 300, y: 0, angle: 0, scale: 1 }]);
+  assert(d.counts.instanced === 1 && d.counts.plain === 1,
+    `draw calls: ${d.counts.instanced} instanced, ${d.counts.plain} plain`);
+  assert(d.renderer.gl.getError() === d.renderer.gl.NO_ERROR, 'gl.getError() reported a problem');
+});
+
+test('render: setVoid(null) hides the void', () => {
+  const d = drawWithVoid([], null);
+  assertColor(d.at(0, 0), GROUND, 'center');
+  assert(d.counts.plain === 0, 'drew the void anyway');
+});
+
+test('render: a leaf at fade 0.5 is halfway between leaf and ground', () => {
+  const d = drawWithVoid([{ x: 300, y: 0, angle: 0, scale: 1, fade: 0.5 }], null);
+  const c = d.at(300, 0);
+  // Blended color = 0.5 * leaf + 0.5 * ground, and the leaf is the base orange times a shade k.
+  const k = (2 * c[0] - GROUND[0]) / ORANGE[0];
+  const ok = k >= 0.83 && k <= 1.17
+    && Math.abs(c[1] - (0.5 * ORANGE[1] * k + 0.5 * GROUND[1])) <= 4
+    && Math.abs(c[2] - (0.5 * ORANGE[2] * k + 0.5 * GROUND[2])) <= 4;
+  assert(ok, `pixel (${c}) is not halfway between a leaf shade and the ground`);
+});
+
+test('render: a leaf at fade 0 is invisible', () => {
+  const d = drawWithVoid([{ x: 300, y: 0, angle: 0, scale: 1, fade: 0 }], null);
+  assertColor(d.at(300, 0), GROUND, 'faded leaf');
+});
+
+test('render: blending never makes the canvas see-through (alpha stays 255)', () => {
+  const d = drawWithVoid([{ x: 300, y: 0, angle: 0, scale: 1, fade: 0.5 }]);
+  const gl = d.renderer.gl;
+  for (const [x, y] of [[300, 0], [0, 0], [220, 0]]) {
+    const p = transformPoint(projection(WORLD_WIDTH, WORLD_HEIGHT, d.canvas.width, d.canvas.height), x, y);
+    const px = Math.floor((p[0] * 0.5 + 0.5) * d.canvas.width);
+    const py = Math.floor((p[1] * 0.5 + 0.5) * d.canvas.height);
+    const out = new Uint8Array(4);
+    gl.readPixels(px, py, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, out);
+    assert(out[3] === 255, `alpha ${out[3]} at (${x}, ${y})`);
+  }
+});
+
+test('render: a bad void setting hides the void instead of failing', () => {
+  const d = drawWithVoid([], { x: NaN, y: 0, discRadius: 40, ringRadius: 220 });
+  assertColor(d.at(0, 0), GROUND, 'center');
+  assert(d.renderer.gl.getError() === d.renderer.gl.NO_ERROR, 'gl.getError() reported a problem');
 });

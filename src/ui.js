@@ -42,6 +42,9 @@ export function createControls(settings) {
   tuning.addBinding(settings, 'gustStrength', { label: 'gusts', min: 0, max: 1, step: 0.05 });
   tuning.addBinding(settings, 'gustSize', { label: 'gust size', min: 100, max: 800, step: 10 });
   tuning.addBinding(settings, 'spinAmount', { label: 'spin', min: 0, max: 2, step: 0.05 });
+  // Step 7: the void's pull and the size of its attraction radius.
+  tuning.addBinding(settings, 'suction', { label: 'suction', min: 0, max: 1000, step: 10 });
+  tuning.addBinding(settings, 'voidRadius', { label: 'void radius', min: 100, max: 400, step: 10 });
 
   // Any change: update the name shown under the speed slider.
   pane.on('change', () => {

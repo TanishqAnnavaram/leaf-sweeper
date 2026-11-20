@@ -58,3 +58,91 @@ html, body {
 #error {
   z-index: 1;
 }
+
+/* Counter, progress bar and timer, bottom center. */
+#hud {
+  position: absolute;
+  bottom: 16px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 14px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #f0e6da;
+  font: 14px system-ui, sans-serif;
+  border-radius: 10px;
+  pointer-events: none;   /* clicks pass through to the canvas */
+  white-space: nowrap;
+}
+
+#hud-time {
+  font-family: ui-monospace, Consolas, monospace;   /* fixed-width digits do not jitter */
+}
+
+#hud-bar {
+  width: 160px;
+  height: 8px;
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 4px;
+  overflow: hidden;
+}
+
+#hud-fill {
+  width: 0%;
+  height: 100%;
+  background: #d9661a;   /* leaf orange */
+}
+
+/* Win card: covers the screen with a dark veil and centers the card. */
+#win {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.45);
+  z-index: 2;
+}
+
+/* "display: flex" above would override the hidden attribute, so hidden must be restated. */
+#win[hidden] {
+  display: none;
+}
+
+#win .card {
+  padding: 24px 32px;
+  background: #2a1f18;
+  color: #f0e6da;
+  font: 16px system-ui, sans-serif;
+  text-align: center;
+  border-radius: 12px;
+  box-shadow: 0 8px 30px rgba(0, 0, 0, 0.5);
+}
+
+#win h2 {
+  margin: 0 0 8px;
+  font-size: 26px;
+}
+
+#win .buttons {
+  display: flex;
+  gap: 12px;
+  justify-content: center;
+  margin-top: 16px;
+}
+
+#win button {
+  padding: 8px 16px;
+  font: inherit;
+  color: #1b1410;
+  background: #e8a25c;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+#win button:hover {
+  background: #f2b878;
+}

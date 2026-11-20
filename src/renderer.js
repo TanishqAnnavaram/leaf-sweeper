@@ -1,18 +1,19 @@
-import { leafVertex, leafFragment } from './shaders.js';
+import { leafVertex, leafFragment, voidVertex, voidFragment } from './shaders.js';
 import { projection, worldRect } from './math.js';
 import { WORLD_WIDTH, WORLD_HEIGHT, LEAF_WIDTH, LEAF_HEIGHT, MAX_LEAVES } from './config.js';
 
-const FLOATS_PER_LEAF = 4;   // x, y, angle, scale
+// Floats per leaf in the GPU buffer: x, y, angle, scale (step 4), plus fade (step 7).
+export const FLOATS_PER_LEAF = 5;
 
 function isNumber(value) {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
-// Copy the leaves into one flat array, 4 numbers per leaf: [x0, y0, angle0, scale0, x1, y1, ...].
+// Copy the leaves into one flat array, 5 numbers per leaf: [x0, y0, angle0, scale0, fade0, x1, ...].
 // This is the layout the GPU reads (see the aLeaf attribute below). Pure function: no WebGL.
 // Returns how many leaves were written. Leaves that do not fit in `out` are left out.
 // A leaf with a missing or non-finite value is written as all zeros: scale 0 means it is not drawn,
-// so one bad leaf can never break the frame.
+// so one bad leaf can never break the frame. A missing fade means 1 (fully visible).
 export function packLeaves(leaves, out) {
   if (!Array.isArray(leaves)) {
     return 0;
@@ -21,13 +22,16 @@ export function packLeaves(leaves, out) {
   const count = Math.min(leaves.length, capacity);
   for (let i = 0; i < count; i++) {
     const leaf = leaves[i];
-    const o = i * FLOATS_PER_LEAF;   // where this leaf's 4 numbers start
+    const o = i * FLOATS_PER_LEAF;   // where this leaf's numbers start
     const ok = leaf !== null && typeof leaf === 'object'
       && isNumber(leaf.x) && isNumber(leaf.y) && isNumber(leaf.angle) && isNumber(leaf.scale);
     out[o] = ok ? leaf.x : 0;
     out[o + 1] = ok ? leaf.y : 0;
     out[o + 2] = ok ? leaf.angle : 0;
     out[o + 3] = ok ? leaf.scale : 0;
+    // Fade: 1 = solid, 0 = invisible. Kept in [0, 1]; missing or NaN counts as 1.
+    const fade = ok && isNumber(leaf.fade) ? Math.min(1, Math.max(0, leaf.fade)) : 1;
+    out[o + 4] = ok ? fade : 0;
   }
   return count;
 }
@@ -85,6 +89,7 @@ export function createRenderer(canvas) {
   const program = createProgram(gl, leafVertex, leafFragment);
   const aPosition = gl.getAttribLocation(program, 'aPosition');
   const aLeaf = gl.getAttribLocation(program, 'aLeaf');
+  const aFade = gl.getAttribLocation(program, 'aFade');
   const uProjection = gl.getUniformLocation(program, 'uProjection');
 
   // The leaf shape: a rectangle centered on (0, 0), in world units.
@@ -110,18 +115,77 @@ export function createRenderer(canvas) {
   gl.enableVertexAttribArray(aPosition);
   gl.vertexAttribPointer(aPosition, 2, gl.FLOAT, false, 0, 0);  // 2 floats per corner
 
-  // Buffer 2: per-leaf data, 4 floats per leaf. Made once at full size (MAX_LEAVES leaves = 160 KB),
+  // Buffer 2: per-leaf data, 5 floats per leaf. Made once at full size (MAX_LEAVES leaves = 200 KB),
   // then refilled every frame. DYNAMIC = "we will change this often", a hint for the driver.
   const leafData = new Float32Array(MAX_LEAVES * FLOATS_PER_LEAF);
   const leafBuffer = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, leafBuffer);
   gl.bufferData(gl.ARRAY_BUFFER, leafData.byteLength, gl.DYNAMIC_DRAW);
+  // Each leaf's 5 floats sit side by side, so the "stride" (bytes from one leaf to the next) is 5 * 4 = 20.
+  // aLeaf reads the first 4 floats (offset 0) as a vec4, aFade the 5th float (offset 16 bytes).
+  const stride = FLOATS_PER_LEAF * 4;
   gl.enableVertexAttribArray(aLeaf);
-  gl.vertexAttribPointer(aLeaf, 4, gl.FLOAT, false, 0, 0);   // 4 floats per leaf, read as one vec4
-  // The key line for instancing: divisor 1 means "move to the next 4 floats once per leaf (instance)",
+  gl.vertexAttribPointer(aLeaf, 4, gl.FLOAT, false, stride, 0);
+  gl.enableVertexAttribArray(aFade);
+  gl.vertexAttribPointer(aFade, 1, gl.FLOAT, false, stride, 16);
+  // The key lines for instancing: divisor 1 means "move to the next leaf's values once per leaf (instance)",
   // instead of once per corner (divisor 0, the default, as for aPosition).
   gl.vertexAttribDivisor(aLeaf, 1);
+  gl.vertexAttribDivisor(aFade, 1);
   gl.bindVertexArray(null);
+
+
+  // ---------- The void (step 7): a dark disc and a faint ring, drawn with their own small shader ----------
+  // One square that covers the ring, drawn as 2 triangles. The fragment shader decides, pixel by pixel,
+  // whether the pixel is in the disc, on the ring, or neither (then it draws nothing there).
+  const voidProgram = createProgram(gl, voidVertex, voidFragment);
+  const vCorner = gl.getAttribLocation(voidProgram, 'aCorner');
+  const vProjection = gl.getUniformLocation(voidProgram, 'uProjection');
+  const vCenter = gl.getUniformLocation(voidProgram, 'uCenter');
+  const vHalfSize = gl.getUniformLocation(voidProgram, 'uHalfSize');
+  const vDiscRadius = gl.getUniformLocation(voidProgram, 'uDiscRadius');
+  const vRingRadius = gl.getUniformLocation(voidProgram, 'uRingRadius');
+
+  const voidVao = gl.createVertexArray();
+  gl.bindVertexArray(voidVao);
+  const voidBuffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, voidBuffer);
+  // A square from -1 to 1, in triangle strip order. The vertex shader scales it to the void's size.
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+  gl.enableVertexAttribArray(vCorner);
+  gl.vertexAttribPointer(vCorner, 2, gl.FLOAT, false, 0, 0);
+  gl.bindVertexArray(null);
+
+  let voidSettings = null;   // null = do not draw the void (the default, so older tests see only ground)
+
+  // Show the void at (x, y) with a dark disc of discRadius and a ring at ringRadius (world units),
+  // or hide it with null. Any missing or bad number hides it instead of drawing something broken.
+  function setVoid(settings) {
+    const ok = settings && isNumber(settings.x) && isNumber(settings.y)
+      && isNumber(settings.discRadius) && settings.discRadius >= 0
+      && isNumber(settings.ringRadius) && settings.ringRadius >= 0;
+    voidSettings = ok
+      ? { x: settings.x, y: settings.y, discRadius: settings.discRadius, ringRadius: settings.ringRadius }
+      : null;
+  }
+
+  function drawVoid(proj) {
+    if (!voidSettings) {
+      return;
+    }
+    const v = voidSettings;
+    // Half the square's size: big enough for the ring plus its soft edge (4 world units).
+    const halfSize = Math.max(v.discRadius, v.ringRadius) + 4;
+    gl.useProgram(voidProgram);
+    gl.uniformMatrix3fv(vProjection, false, proj);
+    gl.uniform2f(vCenter, v.x, v.y);
+    gl.uniform1f(vHalfSize, halfSize);
+    gl.uniform1f(vDiscRadius, v.discRadius);
+    gl.uniform1f(vRingRadius, v.ringRadius);
+    gl.bindVertexArray(voidVao);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.bindVertexArray(null);
+  }
 
   let leafCount = 0;          // how many leaves are packed in leafData
   let warnedTooMany = false;  // warn only once if someone asks for more than MAX_LEAVES
@@ -167,8 +231,20 @@ export function createRenderer(canvas) {
     gl.clearColor(0.11, 0.08, 0.06, 1.0);    // dark brown ground
     gl.clear(gl.COLOR_BUFFER_BIT);
 
+    const proj = projection(WORLD_WIDTH, WORLD_HEIGHT, canvas.width, canvas.height);
+
+    // Blending, so fading leaves (and the void's soft edges) mix with what is already drawn:
+    //   color = source * sourceAlpha + destination * (1 - sourceAlpha)
+    // The canvas's own alpha is kept at 1 (factors ZERO, ONE for alpha), otherwise the page would
+    // show through the canvas wherever a leaf is half faded.
+    gl.enable(gl.BLEND);
+    gl.blendFuncSeparate(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA, gl.ZERO, gl.ONE);
+
+    // The void first, so the leaves are drawn on top of it.
+    drawVoid(proj);
+
     if (leafCount === 0) {
-      return;   // nothing to draw
+      return;   // no leaves to draw
     }
 
     // Send this frame's leaf data to the GPU. Only the part in use is copied:
@@ -178,13 +254,12 @@ export function createRenderer(canvas) {
 
     // Draw every leaf with ONE call. The scissor stays on, so a leaf can never be drawn over the bars.
     gl.useProgram(program);
-    gl.uniformMatrix3fv(uProjection, false,
-      projection(WORLD_WIDTH, WORLD_HEIGHT, canvas.width, canvas.height));
+    gl.uniformMatrix3fv(uProjection, false, proj);
     gl.bindVertexArray(vao);
     // 4 corners as a strip = 2 triangles per leaf, repeated for leafCount leaves.
     gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, leafCount);
     gl.bindVertexArray(null);
   }
 
-  return { gl, render, setLeaves };
+  return { gl, render, setLeaves, setVoid };
 }
