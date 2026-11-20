@@ -26,3 +26,15 @@ export const MAX_LEAVES = 10000;      // size of the GPU buffer; extra leaves ar
 export const LEAF_SEED = 20261119;    // seed for the random layout, so every reload looks the same
 export const LEAF_SCALE_MIN = 0.8;    // spawned leaves get a random scale in this range
 export const LEAF_SCALE_MAX = 1.2;
+
+// Step 5: wind and ground drag.
+// FRICTION is how fast the ground slows a leaf, per second. With 1.5, a leaf's speed halves
+// every ln(2) / 1.5 = 0.46 s once the wind stops, so it is nearly still after about 3 s.
+export const FRICTION = 1.5;
+// The wind speed slider runs from 0 (Calm) to this many world units per second (Gale).
+// The wind speed is the speed a leaf ends up moving at, so at Gale a leaf crosses the
+// 1600-unit world in about 4 s.
+export const WIND_MAX_SPEED = 400;
+// Wind at the start: Calm, pointing right. Bearing in degrees, the direction the wind blows
+// toward: 0 = up, 90 = right, 180 = down, 270 = left (clockwise, like a compass).
+export const WIND_START = Object.freeze({ bearing: 90, speed: 0 });

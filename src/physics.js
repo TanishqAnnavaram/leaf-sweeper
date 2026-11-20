@@ -1,10 +1,11 @@
 // Leaf movement. No WebGL here, so this file can be tested on its own in Node.
 // Step 3: leaf movement at constant velocity, stopping at the edge of the world.
 // Step 4: spawning many leaves at random (seeded) places.
+// Step 5: wind and ground drag.
 
 import {
   WORLD_WIDTH, WORLD_HEIGHT, LEAF_WIDTH, LEAF_HEIGHT, MAX_DT, LEAF_START,
-  MAX_LEAVES, LEAF_SEED, LEAF_SCALE_MIN, LEAF_SCALE_MAX,
+  MAX_LEAVES, LEAF_SEED, LEAF_SCALE_MIN, LEAF_SCALE_MAX, WIND_MAX_SPEED,
 } from './config.js';
 import { createRandom } from './random.js';
 
@@ -44,8 +45,39 @@ export function leafRadius(scale) {
   return 0.5 * Math.sqrt(LEAF_WIDTH * LEAF_WIDTH + LEAF_HEIGHT * LEAF_HEIGHT) * Math.abs(scale);
 }
 
+// Turn the wind settings into what stepLeaf needs. Call it once per frame, not once per leaf.
+//   bearing   degrees the wind blows toward: 0 = up, 90 = right, clockwise
+//   speed     world units per second: the speed a leaf ends up moving at in this wind
+//   friction  ground drag, per second
+// Returns { vx, vy, friction }: the wind's velocity as a vector, and a safe friction.
+export function createWind({ bearing, speed, friction } = {}) {
+  const safeFriction = isNumber(friction) && friction > 0 ? friction : 0;
+  if (!isNumber(bearing) || !isNumber(speed) || speed <= 0) {
+    return { vx: 0, vy: 0, friction: safeFriction };   // no wind
+  }
+  // Compass bearing to a vector. A compass measures from "up", clockwise, so
+  // x uses sin and y uses cos (the reverse of a math angle measured from "right", counterclockwise).
+  const radians = (bearing * Math.PI) / 180;
+  return { vx: Math.sin(radians) * speed, vy: Math.cos(radians) * speed, friction: safeFriction };
+}
+
+// A name for the wind speed, shown beside the slider.
+export function windName(speed, topSpeed = WIND_MAX_SPEED) {
+  if (!isNumber(speed) || speed <= 0) {
+    return 'Calm';
+  }
+  if (!isNumber(topSpeed) || topSpeed <= 0) {
+    return 'Gale';   // any wind at all, with no top speed to compare to (avoids dividing by zero)
+  }
+  const fraction = speed / topSpeed;
+  if (fraction < 0.3) return 'Breeze';
+  if (fraction < 0.7) return 'Wind';
+  return 'Gale';
+}
+
 // Move one leaf forward in time by dt seconds. Changes the leaf in place.
-export function stepLeaf(leaf, dt) {
+// `wind` comes from createWind. Without it, the leaf keeps its velocity (no wind, no drag).
+export function stepLeaf(leaf, dt, wind) {
   // A dt that is missing, zero, negative, or not finite means "no time passed".
   if (!isNumber(dt) || dt <= 0) {
     return leaf;
@@ -58,9 +90,33 @@ export function stepLeaf(leaf, dt) {
   if (!isNumber(leaf.x)) leaf.x = 0;
   if (!isNumber(leaf.y)) leaf.y = 0;
 
-  // Euler step for constant velocity: new position = old position + velocity * time.
-  leaf.x += leaf.vx * dt;
-  leaf.y += leaf.vy * dt;
+  const f = wind && isNumber(wind.friction) && wind.friction > 0 ? wind.friction : 0;
+  if (f > 0) {
+    // Wind and drag together. The pitch's two formulas,
+    //   wind:  v = v + a * dt              (a = wind push, an acceleration)
+    //   drag:  v = v * (1 - f * dt)
+    // are small-step versions of one equation:  dv/dt = a - f * v.
+    // Its exact solution over a step of length dt is
+    //   v_new = W + (v - W) * e^(-f * dt),     where W = a / f is the speed the leaf heads toward.
+    // We set W directly (it is the wind speed on the slider), so the push is a = W * f.
+    // Because this is exact, the result is the same at any frame rate, and e^(-f * dt) is
+    // always between 0 and 1, so drag can never flip a leaf backwards.
+    const wx = isNumber(wind.vx) ? wind.vx : 0;
+    const wy = isNumber(wind.vy) ? wind.vy : 0;
+    const decay = Math.exp(-f * dt);
+    // Position, also exact: the integral of v(t) over the step,
+    //   x_new = x + W * dt + (v - W) * (1 - e^(-f * dt)) / f      (f > 0, so no divide by zero)
+    const blend = (1 - decay) / f;
+    leaf.x += wx * dt + (leaf.vx - wx) * blend;
+    leaf.y += wy * dt + (leaf.vy - wy) * blend;
+    leaf.vx = wx + (leaf.vx - wx) * decay;
+    leaf.vy = wy + (leaf.vy - wy) * decay;
+  } else {
+    // No friction: the leaf keeps its velocity (step 3's constant velocity).
+    // Euler step: new position = old position + velocity * time.
+    leaf.x += leaf.vx * dt;
+    leaf.y += leaf.vy * dt;
+  }
 
   // Stop at the world edge. The world runs from -W/2 to W/2 and -H/2 to H/2,
   // and the leaf's center must stay one radius inside that.

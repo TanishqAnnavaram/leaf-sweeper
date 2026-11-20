@@ -1,11 +1,11 @@
-// Rendering tests (steps 2 to 4). These need a real browser with WebGL2, so they only run from tests/index.html.
+// Rendering tests (steps 2 to 5). These need a real browser with WebGL2, so they only run from tests/index.html.
 // Each test draws into a hidden-size canvas, then reads pixels back and checks their color.
 
 import { test, assert } from './harness.js';
 import { createRenderer } from '../src/renderer.js';
 import { projection, transformPoint } from '../src/math.js';
 import { WORLD_WIDTH, WORLD_HEIGHT, MAX_LEAVES } from '../src/config.js';
-import { createLeaf, stepLeaf, spawnLeaves } from '../src/physics.js';
+import { createLeaf, stepLeaf, spawnLeaves, createWind } from '../src/physics.js';
 import { createLoop } from '../src/loop.js';
 
 const ORANGE = [217, 102, 26];   // base leaf color (0.85, 0.40, 0.10) as 0-255 values
@@ -332,4 +332,22 @@ test('render: more than MAX_LEAVES draws MAX_LEAVES, warns once, no WebGL error'
   assert(counts.lastInstances === MAX_LEAVES, `instance count ${counts.lastInstances}`);
   assert(warnings === 1, `warned ${warnings} times`);
   assert(renderer.gl.getError() === renderer.gl.NO_ERROR, 'gl.getError() reported a problem');
+});
+
+// ---------- Step 5: wind ----------
+
+test('render: wind blowing right moves a leaf right on screen', () => {
+  const canvas = makeCanvas(800, 450);
+  const renderer = createRenderer(canvas);
+  const leaf = createLeaf({ x: -200, y: 0, vx: 0, vy: 0, angle: 0, scale: 1 });
+  const wind = createWind({ bearing: 90, speed: 400, friction: 1.5 });
+  const loop = createLoop({
+    update: (dt) => stepLeaf(leaf, dt, wind),
+    render() { renderer.setLeaves([leaf]); renderer.render(); },
+  });
+  for (let i = 0; i <= 30; i++) loop.tick(i * (1000 / 30));   // 1 s at 30 Hz
+  // From rest, 1 s of wind moves it 400 * (1 - (1 - e^-1.5) / 1.5), about 193 units.
+  assert(leaf.x > -200 + 150, `leaf only reached x = ${leaf.x}`);
+  assertLeafColor(pixelAtWorld(renderer, canvas, leaf.x, 0), 'leaf at its new position');
+  assertColor(pixelAtWorld(renderer, canvas, -200, 0), GROUND, 'old position is empty');
 });

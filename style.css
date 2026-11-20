@@ -25,11 +25,12 @@ html, body {
   border-radius: 8px;
 }
 
-/* Shown while the simulation is paused with the P key. */
+/* Shown while the simulation is paused with the P key. Top center. */
 #paused {
   position: absolute;
   top: 16px;
-  right: 16px;
+  left: 50%;
+  transform: translateX(-50%);   /* centered: the wind panel is in the top right */
   margin: 0;
   padding: 6px 12px;
   background: rgba(0, 0, 0, 0.55);

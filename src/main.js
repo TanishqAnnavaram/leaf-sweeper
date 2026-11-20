@@ -1,8 +1,11 @@
 import { createRenderer } from './renderer.js';
-import { stepLeaf, spawnLeaves } from './physics.js';
+import { stepLeaf, spawnLeaves, createWind } from './physics.js';
 import { createLoop } from './loop.js';
 import { createFpsCounter } from './fps.js';
-import { LEAF_COUNT, LEAF_SEED } from './config.js';
+import { createControls } from './ui.js';
+import {
+  LEAF_COUNT, LEAF_SEED, FRICTION, WIND_MAX_SPEED, WIND_START,
+} from './config.js';
 
 const canvas = document.querySelector('#game');
 const errorBox = document.querySelector('#error');
@@ -22,6 +25,15 @@ try {
   const fps = createFpsCounter();
   let shownStats = null;   // the report currently on screen
   let updateMs = 0;        // time the last update took
+
+  // Wind settings. The control panel's sliders change these values; update() reads them each frame.
+  const settings = {
+    bearing: WIND_START.bearing,   // degrees the wind blows toward (0 = up, 90 = right)
+    speed: WIND_START.speed,       // world units per second, 0 = Calm
+    friction: FRICTION,
+    topSpeed: WIND_MAX_SPEED,
+  };
+  createControls(settings);
 
   // Write the counter text. Called only when a new report arrives (every 0.5 s), not every frame,
   // because changing page text is slow compared with our drawing.
@@ -44,8 +56,9 @@ try {
   const loop = createLoop({
     update(dt) {
       const t0 = performance.now();
+      const wind = createWind(settings);   // once per frame, shared by every leaf
       for (const leaf of leaves) {
-        stepLeaf(leaf, dt);
+        stepLeaf(leaf, dt, wind);
       }
       updateMs = performance.now() - t0;
     },
@@ -67,7 +80,8 @@ try {
   // P pauses and unpauses, F hides and shows the counter.
   // e.repeat is true while a key is held down, so holding a key toggles only once.
   window.addEventListener('keydown', (e) => {
-    if (e.repeat) {
+    // Ignore held keys, and keys typed into a text box (Tweakpane has number boxes).
+    if (e.repeat || (e.target instanceof HTMLElement && e.target.closest('input, textarea'))) {
       return;
     }
     if (e.code === 'KeyP') {
@@ -85,6 +99,7 @@ try {
   //   leafDebug.reset()            back to the normal 1000 leaves
   //   leafDebug.count()            how many leaves there are
   //   leafDebug.getLeaf(0)         a copy of one leaf's values
+  //   leafDebug.wind               the live wind settings (change them here or in the panel)
   window.leafDebug = {
     spawn(count, seed = LEAF_SEED) {
       leaves = spawnLeaves(count, seed);
@@ -100,6 +115,7 @@ try {
     getLeaf(i) {
       return leaves[i] ? { ...leaves[i] } : null;   // a copy, so the console cannot change it by accident
     },
+    wind: settings,
   };
 } catch (err) {
   showError(err);
