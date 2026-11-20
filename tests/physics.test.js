@@ -1,10 +1,11 @@
-// Step 3 physics tests. Run with:  node tests/physics.test.js
+// Physics tests (steps 3 and 4). Run with:  node tests/physics.test.js
 // These test src/physics.js only. No WebGL is involved.
 
 import { test, assert, assertClose, assertAllFinite, report } from './harness.js';
-import { createLeaf, setLeafValues, stepLeaf, leafRadius } from '../src/physics.js';
+import { createLeaf, setLeafValues, stepLeaf, leafRadius, spawnLeaves } from '../src/physics.js';
 import {
   WORLD_WIDTH, WORLD_HEIGHT, LEAF_WIDTH, LEAF_HEIGHT, MAX_DT, LEAF_START,
+  LEAF_COUNT, MAX_LEAVES, LEAF_SEED, LEAF_SCALE_MIN, LEAF_SCALE_MAX,
 } from '../src/config.js';
 
 const TOL = 1e-9;
@@ -265,6 +266,82 @@ test('a NaN scale does not make the position NaN', () => {
   leaf.scale = NaN;
   stepLeaf(leaf, 1 / 60);
   assertAllFinite([leaf.x, leaf.y], 'position');
+});
+
+// ---------- Step 4: spawning many leaves ----------
+
+test('step 4 config: 1000 leaves, limit 10,000, scale 0.8 to 1.2, a numeric seed', () => {
+  assert(LEAF_COUNT === 1000, `LEAF_COUNT ${LEAF_COUNT}`);
+  assert(MAX_LEAVES === 10000, `MAX_LEAVES ${MAX_LEAVES}`);
+  assert(LEAF_SCALE_MIN === 0.8 && LEAF_SCALE_MAX === 1.2, `scale ${LEAF_SCALE_MIN} to ${LEAF_SCALE_MAX}`);
+  assert(Number.isFinite(LEAF_SEED), `LEAF_SEED ${LEAF_SEED}`);
+});
+
+test('spawnLeaves(1000) returns 1000 separate leaf objects', () => {
+  const leaves = spawnLeaves(1000, 1);
+  assert(leaves.length === 1000, `length ${leaves.length}`);
+  assert(new Set(leaves).size === 1000, 'some entries are the same object');
+});
+
+test('every spawned leaf is fully inside the world', () => {
+  for (const leaf of spawnLeaves(1000, 2)) {
+    const r = leafRadius(leaf.scale);
+    assert(Math.abs(leaf.x) <= HALF_W - r + 1e-9, `x ${leaf.x} with radius ${r}`);
+    assert(Math.abs(leaf.y) <= HALF_H - r + 1e-9, `y ${leaf.y} with radius ${r}`);
+  }
+});
+
+test('spawned angles are in [0, 2 pi), scales in [0.8, 1.2], velocities 0', () => {
+  for (const leaf of spawnLeaves(1000, 3)) {
+    assert(leaf.angle >= 0 && leaf.angle < 2 * Math.PI, `angle ${leaf.angle}`);
+    assert(leaf.scale >= 0.8 && leaf.scale <= 1.2, `scale ${leaf.scale}`);
+    assert(leaf.vx === 0 && leaf.vy === 0, `velocity (${leaf.vx}, ${leaf.vy})`);
+  }
+});
+
+test('spawned leaves are spread over the whole world', () => {
+  const leaves = spawnLeaves(1000, 4);
+  // Each quarter of the world should get roughly a quarter of the leaves (250).
+  const quarters = [0, 0, 0, 0];
+  for (const leaf of leaves) quarters[(leaf.x >= 0 ? 1 : 0) + (leaf.y >= 0 ? 2 : 0)]++;
+  assert(quarters.every((n) => n > 180 && n < 320), `per quarter: ${quarters}`);
+});
+
+test('the same seed gives the same layout, a different seed a different one', () => {
+  const a = spawnLeaves(50, 7);
+  const b = spawnLeaves(50, 7);
+  const c = spawnLeaves(50, 8);
+  assert(a.every((leaf, i) => leaf.x === b[i].x && leaf.y === b[i].y && leaf.angle === b[i].angle),
+    'same seed, different layout');
+  assert(a.some((leaf, i) => leaf.x !== c[i].x), 'different seed, same layout');
+});
+
+test('spawnLeaves with no seed uses LEAF_SEED', () => {
+  const a = spawnLeaves(10);
+  const b = spawnLeaves(10, LEAF_SEED);
+  assert(a.every((leaf, i) => leaf.x === b[i].x && leaf.y === b[i].y), 'layouts differ');
+});
+
+test('spawnLeaves with 0, negative, NaN, or non-number counts returns an empty list', () => {
+  for (const count of [0, -5, NaN, Infinity, undefined, '100']) {
+    const leaves = spawnLeaves(count, 1);
+    assert(Array.isArray(leaves) && leaves.length === 0, `count ${count}: length ${leaves.length}`);
+  }
+});
+
+test('spawnLeaves rounds a decimal count down', () => {
+  assert(spawnLeaves(10.9, 1).length === 10, 'not rounded down');
+});
+
+test('spawnLeaves never returns more than MAX_LEAVES', () => {
+  assert(spawnLeaves(MAX_LEAVES + 500, 1).length === MAX_LEAVES, 'not clamped');
+});
+
+test('spawned leaves do not move when stepped (they are static)', () => {
+  const leaves = spawnLeaves(100, 5);
+  const before = leaves.map((leaf) => [leaf.x, leaf.y]);
+  for (const leaf of leaves) stepLeaf(leaf, 1 / 60);
+  assert(leaves.every((leaf, i) => leaf.x === before[i][0] && leaf.y === before[i][1]), 'a leaf moved');
 });
 
 // In Node, print the results and set the exit code. In the browser, tests/index.html shows them.

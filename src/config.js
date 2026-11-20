@@ -15,6 +15,14 @@ export const LEAF_HEIGHT = 24;
 // as if only 1/30 s had passed, so it can never jump far in one step.
 export const MAX_DT = 1 / 30;
 
-// Where the step 3 leaf starts: position in world units, velocity in world units per second,
-// angle in radians, scale (1 = normal size). Frozen so no code can change it by accident.
+// Default values for createLeaf (the single moving leaf of step 3): position in world units,
+// velocity in world units per second, angle in radians, scale (1 = normal size).
+// Frozen so no code can change it by accident.
 export const LEAF_START = Object.freeze({ x: -600, y: -300, vx: 200, vy: 120, angle: 0, scale: 1 });
+
+// Step 4: many leaves, drawn with one instanced draw call.
+export const LEAF_COUNT = 1000;       // how many leaves the scene starts with
+export const MAX_LEAVES = 10000;      // size of the GPU buffer; extra leaves are not drawn
+export const LEAF_SEED = 20261119;    // seed for the random layout, so every reload looks the same
+export const LEAF_SCALE_MIN = 0.8;    // spawned leaves get a random scale in this range
+export const LEAF_SCALE_MAX = 1.2;

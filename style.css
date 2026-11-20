@@ -38,3 +38,22 @@ html, body {
   border-radius: 8px;
   pointer-events: none;   /* clicks pass through to the canvas */
 }
+
+/* FPS counter, top left. Press F to hide or show it. */
+#stats {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+  margin: 0;
+  padding: 6px 10px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #f0e6da;
+  font: 12px/1.4 ui-monospace, Consolas, monospace;   /* fixed-width digits do not jitter */
+  border-radius: 8px;
+  pointer-events: none;   /* clicks pass through to the canvas */
+}
+
+/* The error box sits in the same corner, so keep it on top. */
+#error {
+  z-index: 1;
+}

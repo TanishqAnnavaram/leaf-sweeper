@@ -1,7 +1,12 @@
 // Leaf movement. No WebGL here, so this file can be tested on its own in Node.
-// Step 3: one leaf moving at constant velocity that stops at the edge of the world.
+// Step 3: leaf movement at constant velocity, stopping at the edge of the world.
+// Step 4: spawning many leaves at random (seeded) places.
 
-import { WORLD_WIDTH, WORLD_HEIGHT, LEAF_WIDTH, LEAF_HEIGHT, MAX_DT, LEAF_START } from './config.js';
+import {
+  WORLD_WIDTH, WORLD_HEIGHT, LEAF_WIDTH, LEAF_HEIGHT, MAX_DT, LEAF_START,
+  MAX_LEAVES, LEAF_SEED, LEAF_SCALE_MIN, LEAF_SCALE_MAX,
+} from './config.js';
+import { createRandom } from './random.js';
 
 const KEYS = ['x', 'y', 'vx', 'vy', 'angle', 'scale'];
 
@@ -81,4 +86,28 @@ export function stepLeaf(leaf, dt) {
     if (leaf.vy < 0) leaf.vy = 0;
   }
   return leaf;
+}
+
+// Make `count` still leaves at random places, each fully inside the world.
+// The same seed always gives the same layout.
+export function spawnLeaves(count, seed = LEAF_SEED) {
+  // A bad count (NaN, Infinity, text, negative) gives no leaves. A decimal is rounded down.
+  let n = (typeof count === 'number' && Number.isFinite(count)) ? Math.floor(count) : 0;
+  n = Math.max(0, Math.min(n, MAX_LEAVES));
+
+  const random = createRandom(seed);
+  const leaves = [];
+  for (let i = 0; i < n; i++) {
+    // Pick the scale first, because a bigger leaf needs a bigger margin from the edge.
+    const scale = LEAF_SCALE_MIN + (LEAF_SCALE_MAX - LEAF_SCALE_MIN) * random();
+    const r = leafRadius(scale);
+    const maxX = Math.max(0, WORLD_WIDTH / 2 - r);
+    const maxY = Math.max(0, WORLD_HEIGHT / 2 - r);
+    // random() is in [0, 1), so (2 * random() - 1) is in [-1, 1): a position from -max to max.
+    const x = (2 * random() - 1) * maxX;
+    const y = (2 * random() - 1) * maxY;
+    const angle = random() * 2 * Math.PI;   // any direction, [0, 2 pi)
+    leaves.push(createLeaf({ x, y, vx: 0, vy: 0, angle, scale }));
+  }
+  return leaves;
 }

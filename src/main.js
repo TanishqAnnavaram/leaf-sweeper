@@ -1,10 +1,13 @@
 import { createRenderer } from './renderer.js';
-import { createLeaf, setLeafValues, stepLeaf } from './physics.js';
+import { stepLeaf, spawnLeaves } from './physics.js';
 import { createLoop } from './loop.js';
+import { createFpsCounter } from './fps.js';
+import { LEAF_COUNT, LEAF_SEED } from './config.js';
 
 const canvas = document.querySelector('#game');
 const errorBox = document.querySelector('#error');
 const pausedLabel = document.querySelector('#paused');
+const statsBox = document.querySelector('#stats');
 
 // Show a problem on the page as well as in the console.
 function showError(err) {
@@ -15,46 +18,87 @@ function showError(err) {
 
 try {
   const renderer = createRenderer(canvas);
-  const leaf = createLeaf();   // starts at (-600, -300), moving up and to the right
+  let leaves = spawnLeaves(LEAF_COUNT, LEAF_SEED);   // 1000 still leaves, same layout every load
+  const fps = createFpsCounter();
+  let shownStats = null;   // the report currently on screen
+  let updateMs = 0;        // time the last update took
 
-  // Every frame: move the leaf (unless paused), then draw it.
-  // The loop also redraws after a window resize, because render() checks the canvas size each frame.
+  // Write the counter text. Called only when a new report arrives (every 0.5 s), not every frame,
+  // because changing page text is slow compared with our drawing.
+  function showStats(stats) {
+    const lines = stats
+      ? [
+          `FPS    ${stats.fps.toFixed(1)}`,
+          `frame  ${stats.frameMs.toFixed(2)} ms`,
+          `work   ${stats.workMs.toFixed(2)} ms`,
+        ]
+      : ['FPS    --', 'frame  -- ms', 'work   -- ms'];
+    lines.push(`leaves ${leaves.length}`);
+    statsBox.textContent = lines.join('\n');
+  }
+  showStats(null);
+
+  // Every frame: move the leaves (unless paused), then draw them.
+  // "Work" is the time our own code takes: update + packing + upload + draw call.
+  // It does not include the GPU's drawing time, which runs in parallel after the call returns.
   const loop = createLoop({
     update(dt) {
-      stepLeaf(leaf, dt);
+      const t0 = performance.now();
+      for (const leaf of leaves) {
+        stepLeaf(leaf, dt);
+      }
+      updateMs = performance.now() - t0;
     },
     render() {
-      renderer.setLeaf(leaf);
+      const t0 = performance.now();
+      renderer.setLeaves(leaves);
       renderer.render();
+      const t1 = performance.now();
+      const stats = fps.frame(t1, updateMs + (t1 - t0));
+      updateMs = 0;   // when paused, update does not run, so it adds no time
+      if (stats !== shownStats) {
+        shownStats = stats;
+        showStats(stats);
+      }
     },
     onError: showError,
   });
 
-  // P pauses and unpauses. e.repeat is true while the key is held down, so holding P toggles only once.
+  // P pauses and unpauses, F hides and shows the counter.
+  // e.repeat is true while a key is held down, so holding a key toggles only once.
   window.addEventListener('keydown', (e) => {
-    if (e.code === 'KeyP' && !e.repeat) {
+    if (e.repeat) {
+      return;
+    }
+    if (e.code === 'KeyP') {
       pausedLabel.hidden = !loop.togglePaused();
+    } else if (e.code === 'KeyF') {
+      statsBox.hidden = !statsBox.hidden;
     }
   });
 
   loop.start();
 
   // Debug handle for the browser console. For example:
-  //   leafDebug.setLeaf({ x: 400, y: 200, vx: -150, vy: 0 })
-  //   leafDebug.setLeaf({ angle: Math.PI / 4, scale: 3 })
-  //   leafDebug.getLeaf()
-  //   leafDebug.reset()      relaunch from the start values
+  //   leafDebug.spawn(5000)        replace the leaves with 5000 new ones (stress test)
+  //   leafDebug.spawn(5000, 7)     the same, with another random layout
+  //   leafDebug.reset()            back to the normal 1000 leaves
+  //   leafDebug.count()            how many leaves there are
+  //   leafDebug.getLeaf(0)         a copy of one leaf's values
   window.leafDebug = {
-    setLeaf(values) {
-      setLeafValues(leaf, values);
-      return { ...leaf };
-    },
-    getLeaf() {
-      return { ...leaf };   // a copy, so the console cannot change the leaf by accident
+    spawn(count, seed = LEAF_SEED) {
+      leaves = spawnLeaves(count, seed);
+      showStats(shownStats);   // update the leaf count right away
+      return leaves.length;
     },
     reset() {
-      setLeafValues(leaf, createLeaf());
-      return { ...leaf };
+      return window.leafDebug.spawn(LEAF_COUNT, LEAF_SEED);
+    },
+    count() {
+      return leaves.length;
+    },
+    getLeaf(i) {
+      return leaves[i] ? { ...leaves[i] } : null;   // a copy, so the console cannot change it by accident
     },
   };
 } catch (err) {

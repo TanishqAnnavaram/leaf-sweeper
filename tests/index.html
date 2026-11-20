@@ -24,21 +24,29 @@
   <div id="canvases"></div>
 
   <script type="module">
-    import { getResults } from './harness.js';
+    import { test, getResults } from './harness.js';
 
     const summary = document.querySelector('#summary');
     const list = document.querySelector('#results');
 
-    try {
-      // Importing a test file runs its tests.
-      await import('./math.test.js');
-      await import('./physics.test.js');
-      await import('./loop.test.js');
-      await import('./render.test.js');
-    } catch (err) {
-      summary.textContent = 'Could not load the tests: ' + err.message;
-      summary.className = 'fail';
-      console.error(err);
+    const files = [
+      './math.test.js',
+      './physics.test.js',
+      './loop.test.js',
+      './random.test.js',
+      './fps.test.js',
+      './pack.test.js',
+      './render.test.js',
+    ];
+    // Importing a test file runs its tests. Each file is loaded on its own, so one broken file
+    // does not stop the others, and it is counted as a failed test instead of disappearing.
+    for (const file of files) {
+      try {
+        await import(file);
+      } catch (err) {
+        console.error(err);
+        test('load ' + file, () => { throw err; });
+      }
     }
 
     const results = getResults();
