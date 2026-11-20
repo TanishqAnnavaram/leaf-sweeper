@@ -5,7 +5,8 @@
 import { Pane } from '../libs/tweakpane-4.0.5.min.js';
 import { windName } from './physics.js';
 
-// settings: { bearing, speed, friction, topSpeed }. The sliders change these values in place.
+// settings: { bearing, speed, friction, topSpeed, gustStrength, gustSize, spinAmount }.
+// The sliders change these values in place.
 // Adds a read-only `strength` property (Calm, Breeze, Wind, Gale) that the panel displays.
 export function createControls(settings) {
   const pane = new Pane({ title: 'Wind' });   // appears in the top right corner of the page
@@ -37,6 +38,10 @@ export function createControls(settings) {
   tuning.addBinding(settings, 'friction', { label: 'friction', min: 0.2, max: 5, step: 0.1 });
   const topSpeed = tuning.addBinding(settings, 'topSpeed', { label: 'top speed', min: 50, max: 800, step: 10 });
   topSpeed.on('change', addSpeedSlider);
+  // Step 6: gusts and tumbling. Gust strength 0 gives the even wind of step 5.
+  tuning.addBinding(settings, 'gustStrength', { label: 'gusts', min: 0, max: 1, step: 0.05 });
+  tuning.addBinding(settings, 'gustSize', { label: 'gust size', min: 100, max: 800, step: 10 });
+  tuning.addBinding(settings, 'spinAmount', { label: 'spin', min: 0, max: 2, step: 0.05 });
 
   // Any change: update the name shown under the speed slider.
   pane.on('change', () => {

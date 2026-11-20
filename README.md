@@ -22,17 +22,18 @@ node tests/loop.test.js
 node tests/random.test.js
 node tests/fps.test.js
 node tests/pack.test.js
+node tests/noise.test.js
 ```
 
 run the tests that need no browser. With the local server running, http://localhost:8000/tests/ runs all of them plus the rendering tests in the browser.
 
 ## Controls
 
-- Wind panel (top right): direction (0 = up, 90 = right) and speed (Calm to Gale). The Tuning folder changes the ground friction and the top wind speed.
+- Wind panel (top right): direction (0 = up, 90 = right) and speed (Calm to Gale). The Tuning folder changes the ground friction, the top wind speed, the gust strength and size, and how much leaves spin.
 - `P`: pause and unpause the simulation.
 - `F`: hide and show the FPS counter.
 
-In the browser console, `leafDebug.spawn(5000)` replaces the leaves with 5000 new ones (up to 10,000), `leafDebug.reset()` goes back to the normal 1000, `leafDebug.count()` gives the number of leaves, and `leafDebug.getLeaf(0)` shows one leaf's values. `leafDebug.wind` holds the live wind settings.
+In the browser console, `leafDebug.spawn(5000)` replaces the leaves with 5000 new ones (up to 10,000), `leafDebug.reset()` goes back to the normal 1000, `leafDebug.count()` gives the number of leaves, and `leafDebug.getLeaf(0)` shows one leaf's values. `leafDebug.wind` holds the live wind settings and `leafDebug.gusts` the gust time and drift.
 
 ## Structure
 
@@ -42,7 +43,8 @@ style.css         layout and look
 src/main.js       start-up, keys, FPS display, debug handle
 src/ui.js         wind control panel (Tweakpane)
 src/loop.js       game loop with a clamped time step (no WebGL)
-src/physics.js    leaf movement, wind and drag, world edges, spawning leaves (no WebGL)
+src/physics.js    leaf movement, wind and drag, gusts, tumbling, world edges, spawning leaves (no WebGL)
+src/noise.js      our own 3D Perlin noise for the gusts (no WebGL)
 src/random.js     seeded random numbers (no WebGL)
 src/fps.js        FPS counter (no WebGL)
 src/renderer.js   WebGL setup and instanced drawing
@@ -61,4 +63,5 @@ libs/             third-party libraries: Tweakpane 4.0.5 (MIT license)
 - [x] Step 3: game loop with a time step, one leaf at constant velocity
 - [x] Step 4: 1000 leaves in one instanced draw call, FPS counter
 - [x] Step 5: wind and ground drag on all leaves, wind panel
-- [ ] Step 6 onward: see the build order
+- [x] Step 6: noise gusts and tumbling
+- [ ] Step 7 onward: see the build order

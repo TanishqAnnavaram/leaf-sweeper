@@ -1,14 +1,17 @@
-// Physics tests (steps 3 to 5). Run with:  node tests/physics.test.js
+// Physics tests (steps 3 to 6). Run with:  node tests/physics.test.js
 // These test src/physics.js only. No WebGL is involved.
 
 import { test, assert, assertClose, assertAllFinite, report } from './harness.js';
 import {
   createLeaf, setLeafValues, stepLeaf, leafRadius, spawnLeaves, createWind, windName,
+  leafWind, createGusts, advanceGusts,
 } from '../src/physics.js';
+import { createNoise } from '../src/noise.js';
 import {
   WORLD_WIDTH, WORLD_HEIGHT, LEAF_WIDTH, LEAF_HEIGHT, MAX_DT, LEAF_START,
   LEAF_COUNT, MAX_LEAVES, LEAF_SEED, LEAF_SCALE_MIN, LEAF_SCALE_MAX,
   FRICTION, WIND_MAX_SPEED, WIND_START,
+  GUST_STRENGTH, GUST_SIZE, GUST_MAX_TURN, SPIN_AMOUNT, SPIN_FACTOR_MIN, SPIN_FACTOR_MAX,
 } from '../src/config.js';
 
 const TOL = 1e-9;
@@ -534,6 +537,271 @@ test('1000 spawned leaves all drift with the wind', () => {
   // Every leaf moved right, except ones already at the right wall.
   assert(leaves.every((leaf, i) => leaf.x > before[i] || leaf.x >= HALF_W - leafRadius(leaf.scale) - 1e-9),
     'a leaf did not move right');
+});
+
+// ---------- Step 6: gusts ----------
+
+const NOISE = createNoise(LEAF_SEED);
+
+// Base wind plus gust settings. `gusts` holds the noise, the time, and the drift offset.
+function gusty({ bearing = 90, speed = TOP, strength = 0.6, size = 300, spin = 0, gusts } = {}) {
+  return createWind(
+    { bearing, speed, friction: F, gustStrength: strength, gustSize: size, spinAmount: spin },
+    gusts || createGusts(NOISE),
+  );
+}
+
+function windAngleDeg(v) {
+  return (Math.atan2(v.vx, v.vy) * 180) / Math.PI;   // compass bearing of a wind vector
+}
+
+test('step 6 config: gust 0.6, size 300, turn 25 degrees, spin 0.3 to 1.0', () => {
+  assert(GUST_STRENGTH === 0.6 && GUST_SIZE === 300 && GUST_MAX_TURN === 25,
+    `${GUST_STRENGTH}, ${GUST_SIZE}, ${GUST_MAX_TURN}`);
+  assert(SPIN_FACTOR_MIN === 0.3 && SPIN_FACTOR_MAX === 1.0, `${SPIN_FACTOR_MIN} to ${SPIN_FACTOR_MAX}`);
+  assert(Number.isFinite(SPIN_AMOUNT) && SPIN_AMOUNT >= 0 && SPIN_AMOUNT <= 2, `SPIN_AMOUNT ${SPIN_AMOUNT}`);
+});
+
+test('gust strength 0 gives exactly the step 5 result', () => {
+  const a = leafAt({ x: -300, y: 50 });
+  const b = leafAt({ x: -300, y: 50 });
+  const plain = blowing(60);
+  const zeroGust = gusty({ bearing: 60, strength: 0 });
+  for (let i = 0; i < 60; i++) {
+    stepLeaf(a, 1 / 60, plain);
+    stepLeaf(b, 1 / 60, zeroGust);
+  }
+  assert(a.x === b.x && a.y === b.y && a.vx === b.vx && a.vy === b.vy, 'results differ');
+});
+
+test('createWind without gust settings has no gusts and no spin (step 5 behavior)', () => {
+  const w = createWind({ bearing: 90, speed: TOP, friction: F });
+  const v = leafWind(w, 123, 45);
+  assert(v.vx === w.vx && v.vy === w.vy, `got (${v.vx}, ${v.vy})`);
+  assert(w.spinAmount === 0, `spinAmount ${w.spinAmount}`);
+});
+
+test('Calm with gusts still means no wind and no motion', () => {
+  const w = gusty({ speed: 0, strength: 1 });
+  const v = leafWind(w, 100, 100);
+  assert(v.vx === 0 && v.vy === 0, `got (${v.vx}, ${v.vy})`);
+  const leaf = run(leafAt({ x: 10, y: 20 }), w, 1);
+  assert(leaf.x === 10 && leaf.y === 20, `moved to (${leaf.x}, ${leaf.y})`);
+});
+
+test('each leaf wind is 0.4x to 1.6x the base speed and within 25 degrees', () => {
+  const w = gusty({ bearing: 90 });
+  for (let i = 0; i < 2000; i++) {
+    const x = -800 + (i % 50) * 32 + 0.37;
+    const y = -450 + Math.floor(i / 50) * 22 + 0.19;
+    const v = leafWind(w, x, y);
+    const speed = Math.hypot(v.vx, v.vy);
+    assert(speed >= 0.4 * TOP - 1e-9 && speed <= 1.6 * TOP + 1e-9, `speed ${speed} at (${x}, ${y})`);
+    assert(Math.abs(windAngleDeg(v) - 90) <= 25 + 1e-9, `angle ${windAngleDeg(v)} at (${x}, ${y})`);
+  }
+});
+
+test('gusts really vary: speeds and angles spread across the field', () => {
+  const w = gusty({ bearing: 90 });
+  let minS = Infinity, maxS = -Infinity, minA = Infinity, maxA = -Infinity;
+  for (let i = 0; i < 2000; i++) {
+    const v = leafWind(w, -800 + (i % 50) * 32 + 0.37, -450 + Math.floor(i / 50) * 22 + 0.19);
+    const s = Math.hypot(v.vx, v.vy);
+    minS = Math.min(minS, s); maxS = Math.max(maxS, s);
+    minA = Math.min(minA, windAngleDeg(v)); maxA = Math.max(maxA, windAngleDeg(v));
+  }
+  assert(maxS - minS > 0.4 * TOP, `speeds only ${minS.toFixed(0)} to ${maxS.toFixed(0)}`);
+  assert(maxA - minA > 15, `angles only ${minA.toFixed(1)} to ${maxA.toFixed(1)}`);
+});
+
+test('the same position and time give the same wind', () => {
+  const gusts = createGusts(NOISE);
+  const w1 = gusty({ gusts });
+  const w2 = gusty({ gusts });
+  const a = leafWind(w1, 250.5, -120.25);
+  const b = leafWind(w2, 250.5, -120.25);
+  assert(a.vx === b.vx && a.vy === b.vy, 'different wind at the same place and time');
+});
+
+test('leaves far apart get different wind', () => {
+  const w = gusty();
+  let differ = 0;
+  for (let i = 0; i < 50; i++) {
+    const a = leafWind(w, -700 + i * 10, -300);
+    const b = leafWind(w, -700 + i * 10 + 600, 300);
+    if (Math.abs(a.vx - b.vx) > 1) differ++;
+  }
+  assert(differ > 40, `only ${differ} of 50 pairs differ`);
+});
+
+test('the wind at one spot changes over time', () => {
+  const gusts = createGusts(NOISE);
+  const before = leafWind(gusty({ gusts }), 100.5, 50.5);
+  advanceGusts(gusts, gusty({ gusts }), 1 / 30);
+  for (let i = 0; i < 59; i++) advanceGusts(gusts, gusty({ gusts }), 1 / 30);   // 2 s
+  const after = leafWind(gusty({ gusts }), 100.5, 50.5);
+  assert(Math.abs(after.vx - before.vx) > 1 || Math.abs(after.vy - before.vy) > 1, 'no change after 2 s');
+});
+
+test('advanceGusts moves time and drifts the pattern downwind', () => {
+  const gusts = createGusts(NOISE);
+  const w = gusty({ bearing: 90, speed: 200, gusts });
+  advanceGusts(gusts, w, 1 / 60);
+  assertClose(gusts.time, 1 / 60, 1e-12, 'time');
+  assertClose(gusts.offsetX, 200 / 60, 1e-9, 'offsetX');
+  assertClose(gusts.offsetY, 0, 1e-9, 'offsetY');
+});
+
+test('advanceGusts ignores a bad dt and clamps a huge one', () => {
+  const gusts = createGusts(NOISE);
+  const w = gusty({ gusts });
+  for (const dt of [0, -1, NaN, Infinity]) advanceGusts(gusts, w, dt);
+  assert(gusts.time === 0 && gusts.offsetX === 0, `time ${gusts.time}, offset ${gusts.offsetX}`);
+  advanceGusts(gusts, w, 5);
+  assertClose(gusts.time, MAX_DT, 1e-12, 'time after a 5 s dt');
+});
+
+test('averaged over a large area, the wind speed is close to the base speed', () => {
+  const w = gusty({ bearing: 90 });
+  let sum = 0, n = 0;
+  for (let i = 0; i < 100; i++) {
+    for (let j = 0; j < 100; j++) {
+      const v = leafWind(w, i * 97.3, j * 61.7);
+      sum += Math.hypot(v.vx, v.vy);
+      n++;
+    }
+  }
+  assertClose(sum / n / TOP, 1, 0.08, 'average speed / base speed');
+});
+
+test('bad gust settings never make NaN and never make the wind negative', () => {
+  const cases = [
+    { gustStrength: NaN }, { gustStrength: -1 }, { gustStrength: 5 }, { gustSize: 0 },
+    { gustSize: -100 }, { gustSize: NaN }, { spinAmount: NaN }, { spinAmount: -1 },
+  ];
+  for (const extra of cases) {
+    const w = createWind({ bearing: 90, speed: TOP, friction: F, gustStrength: 0.6, gustSize: 300, ...extra },
+      createGusts(NOISE));
+    for (let i = 0; i < 200; i++) {
+      const v = leafWind(w, i * 13.7 - 800, i * 4.1 - 400);
+      assertAllFinite([v.vx, v.vy], `${JSON.stringify(extra)}`);
+      assert(v.vx >= -1e-9, `${JSON.stringify(extra)}: wind turned backwards, vx ${v.vx}`);
+    }
+    const leaf = run(leafAt({}), w, 0.5);
+    assertAllFinite([leaf.x, leaf.y, leaf.vx, leaf.vy, leaf.angle], `${JSON.stringify(extra)} leaf`);
+  }
+});
+
+test('gusts with a missing noise function fall back to even wind', () => {
+  const w = createWind({ bearing: 90, speed: TOP, friction: F, gustStrength: 0.6, gustSize: 300 },
+    { time: 0, offsetX: 0, offsetY: 0 });
+  const v = leafWind(w, 10, 10);
+  assertClose(v.vx, TOP, 1e-9, 'vx');
+});
+
+test('1 s with gusts at 30, 60, and 144 steps per second ends within 2%', () => {
+  const ends = [30, 60, 144].map((hz) => {
+    const gusts = createGusts(NOISE);
+    const leaf = leafAt({ x: -600, y: -100 });
+    for (let i = 0; i < hz; i++) {
+      const w = gusty({ bearing: 60, gusts });
+      stepLeaf(leaf, 1 / hz, w);
+      advanceGusts(gusts, w, 1 / hz);
+    }
+    return leaf;
+  });
+  const travel = ends[0].x + 600;
+  for (const leaf of ends.slice(1)) {
+    assert(Math.abs(leaf.x - ends[0].x) < 0.02 * travel, `x ${leaf.x} vs ${ends[0].x}`);
+  }
+});
+
+// ---------- Step 6: tumbling ----------
+
+function spinner(values) {
+  return leafAt({ spin: 0, spinFactor: 1, ...values });
+}
+
+test('a still leaf does not spin', () => {
+  const leaf = spinner({ angle: 1 });
+  run(leaf, gusty({ speed: 0, spin: 1 }), 1);
+  assert(leaf.angle === 1, `angle ${leaf.angle}`);
+});
+
+test('a moving leaf spins', () => {
+  const leaf = spinner({ x: -600, angle: 1 });
+  run(leaf, gusty({ strength: 0, spin: 1 }), 1);
+  assert(Math.abs(leaf.spin) > 1 && leaf.angle !== 1, `spin ${leaf.spin}, angle ${leaf.angle}`);
+});
+
+test('faster leaves spin faster', () => {
+  const slow = run(spinner({ x: -600 }), gusty({ speed: 100, strength: 0, spin: 1 }), 1);
+  const fast = run(spinner({ x: -600 }), gusty({ speed: 400, strength: 0, spin: 1 }), 1);
+  assert(Math.abs(fast.spin) > 2 * Math.abs(slow.spin), `slow ${slow.spin}, fast ${fast.spin}`);
+});
+
+test('spin follows speed / radius * spinFactor * spinAmount', () => {
+  // Wind 100 for 4 s: speed about 100, so the target spin is 100 / r * 0.5 * 1.
+  const leaf = run(spinner({ x: -700, spinFactor: 0.5 }), gusty({ speed: 100, strength: 0, spin: 1 }), 4);
+  const target = (Math.hypot(leaf.vx, leaf.vy) / leafRadius(1)) * 0.5;
+  assertClose(leaf.spin, target, 0.05 * target, 'spin');
+});
+
+test('the sign of spinFactor sets the spin direction', () => {
+  const ccw = run(spinner({ x: -600, spinFactor: 0.8 }), gusty({ strength: 0, spin: 1 }), 0.5);
+  const cw = run(spinner({ x: -600, spinFactor: -0.8 }), gusty({ strength: 0, spin: 1 }), 0.5);
+  assert(ccw.spin > 0 && cw.spin < 0, `ccw ${ccw.spin}, cw ${cw.spin}`);
+});
+
+test('spin dies out within about 3 s after the wind stops', () => {
+  const leaf = run(spinner({ x: -600 }), gusty({ strength: 0, spin: 1 }), 1);
+  const spinning = Math.abs(leaf.spin);
+  run(leaf, gusty({ speed: 0, spin: 1 }), 3);
+  // Under 0.3 rad/s is less than one turn every 20 s: still to the eye.
+  assert(Math.abs(leaf.spin) < 0.3, `spin ${leaf.spin} after 3 s of Calm (was ${spinning})`);
+  assert(Math.abs(leaf.spin) < spinning / 20, 'spin did not die out');
+});
+
+test('spin amount 0 means no rotation, even when moving', () => {
+  const leaf = run(spinner({ x: -600, angle: 2 }), gusty({ strength: 0, spin: 0 }), 1);
+  assert(leaf.angle === 2, `angle ${leaf.angle}`);
+});
+
+test('the angle stays finite and inside [0, 2 pi) after a long spin', () => {
+  const leaf = spinner({ x: -790, spinFactor: 1 });
+  const w = gusty({ bearing: 0, speed: 50, strength: 0, spin: 2 });
+  for (let i = 0; i < 60 * 60; i++) {   // one minute
+    stepLeaf(leaf, 1 / 60, w);
+    leaf.y = 0;   // keep it away from the top wall so it never stops
+    assert(Number.isFinite(leaf.angle) && leaf.angle >= 0 && leaf.angle < 2 * Math.PI,
+      `angle ${leaf.angle} at step ${i}`);
+  }
+});
+
+test('NaN spin or spinFactor never makes the angle NaN', () => {
+  const leaf = spinner({ x: -600 });
+  leaf.spin = NaN;
+  leaf.spinFactor = Infinity;
+  run(leaf, gusty({ spin: 1 }), 0.5);
+  assertAllFinite([leaf.angle, leaf.spin], 'angle and spin');
+});
+
+test('spawned leaves have spin 0 and spin factors 0.3 to 1.0 in both directions', () => {
+  const leaves = spawnLeaves(1000, 12);
+  let cw = 0, ccw = 0;
+  for (const leaf of leaves) {
+    assert(leaf.spin === 0, `spin ${leaf.spin}`);
+    const m = Math.abs(leaf.spinFactor);
+    assert(m >= 0.3 && m <= 1.0, `spinFactor ${leaf.spinFactor}`);
+    if (leaf.spinFactor > 0) ccw++; else cw++;
+  }
+  assert(cw > 400 && ccw > 400, `${cw} clockwise, ${ccw} counterclockwise`);
+});
+
+test('the same seed gives the same spin factors', () => {
+  const a = spawnLeaves(50, 13);
+  const b = spawnLeaves(50, 13);
+  assert(a.every((leaf, i) => leaf.spinFactor === b[i].spinFactor), 'spin factors differ');
 });
 
 // In Node, print the results and set the exit code. In the browser, tests/index.html shows them.

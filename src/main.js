@@ -1,10 +1,14 @@
 import { createRenderer } from './renderer.js';
-import { stepLeaf, spawnLeaves, createWind } from './physics.js';
+import {
+  stepLeaf, spawnLeaves, createWind, createGusts, advanceGusts,
+} from './physics.js';
+import { createNoise } from './noise.js';
 import { createLoop } from './loop.js';
 import { createFpsCounter } from './fps.js';
 import { createControls } from './ui.js';
 import {
   LEAF_COUNT, LEAF_SEED, FRICTION, WIND_MAX_SPEED, WIND_START,
+  GUST_STRENGTH, GUST_SIZE, SPIN_AMOUNT,
 } from './config.js';
 
 const canvas = document.querySelector('#game');
@@ -32,8 +36,15 @@ try {
     speed: WIND_START.speed,       // world units per second, 0 = Calm
     friction: FRICTION,
     topSpeed: WIND_MAX_SPEED,
+    gustStrength: GUST_STRENGTH,   // 0 = even wind (step 5), 1 = strongest gusts
+    gustSize: GUST_SIZE,           // world units across one gust patch
+    spinAmount: SPIN_AMOUNT,       // how much moving leaves tumble
   };
   createControls(settings);
+
+  // Gust state: our own Perlin noise (seeded, so gusts are the same on every load), the simulation
+  // time, and the drift of the gust pattern. It only moves forward in update(), so pausing freezes it.
+  const gusts = createGusts(createNoise(LEAF_SEED));
 
   // Write the counter text. Called only when a new report arrives (every 0.5 s), not every frame,
   // because changing page text is slow compared with our drawing.
@@ -56,10 +67,11 @@ try {
   const loop = createLoop({
     update(dt) {
       const t0 = performance.now();
-      const wind = createWind(settings);   // once per frame, shared by every leaf
+      const wind = createWind(settings, gusts);   // once per frame, shared by every leaf
       for (const leaf of leaves) {
-        stepLeaf(leaf, dt, wind);
+        stepLeaf(leaf, dt, wind);   // each leaf reads its own gust from the noise inside stepLeaf
       }
+      advanceGusts(gusts, wind, dt);   // then time moves on and the gust pattern drifts downwind
       updateMs = performance.now() - t0;
     },
     render() {
@@ -100,6 +112,7 @@ try {
   //   leafDebug.count()            how many leaves there are
   //   leafDebug.getLeaf(0)         a copy of one leaf's values
   //   leafDebug.wind               the live wind settings (change them here or in the panel)
+  //   leafDebug.gusts              the gust state: simulation time and drift
   window.leafDebug = {
     spawn(count, seed = LEAF_SEED) {
       leaves = spawnLeaves(count, seed);
@@ -116,6 +129,7 @@ try {
       return leaves[i] ? { ...leaves[i] } : null;   // a copy, so the console cannot change it by accident
     },
     wind: settings,
+    gusts,
   };
 } catch (err) {
   showError(err);

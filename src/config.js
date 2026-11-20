@@ -18,7 +18,9 @@ export const MAX_DT = 1 / 30;
 // Default values for createLeaf (the single moving leaf of step 3): position in world units,
 // velocity in world units per second, angle in radians, scale (1 = normal size).
 // Frozen so no code can change it by accident.
-export const LEAF_START = Object.freeze({ x: -600, y: -300, vx: 200, vy: 120, angle: 0, scale: 1 });
+export const LEAF_START = Object.freeze({
+  x: -600, y: -300, vx: 200, vy: 120, angle: 0, scale: 1, spin: 0, spinFactor: 0,
+});
 
 // Step 4: many leaves, drawn with one instanced draw call.
 export const LEAF_COUNT = 1000;       // how many leaves the scene starts with
@@ -38,3 +40,17 @@ export const WIND_MAX_SPEED = 400;
 // Wind at the start: Calm, pointing right. Bearing in degrees, the direction the wind blows
 // toward: 0 = up, 90 = right, 180 = down, 270 = left (clockwise, like a compass).
 export const WIND_START = Object.freeze({ bearing: 90, speed: 0 });
+
+// Step 6: noise gusts and tumbling.
+// Each leaf's wind is the base wind times (1 + GUST_STRENGTH * gust), with gust from -1 to 1,
+// so 0.6 gives 0.4x to 1.6x the base speed. A second noise value turns it by up to GUST_MAX_TURN degrees.
+export const GUST_STRENGTH = 0.6;
+export const GUST_SIZE = 300;         // size of one gust patch, in world units
+export const GUST_MAX_TURN = 25;      // degrees
+export const GUST_EVOLVE = 0.25;      // how fast the gust pattern changes shape (noise units per second)
+// Tumbling: a leaf's spin heads toward  speed / radius * spinFactor * SPIN_AMOUNT  (radians per second).
+// speed / radius is how fast a wheel of that radius turns when it rolls at that speed.
+export const SPIN_AMOUNT = 0.5;
+export const SPIN_RESPONSE = 4;       // how fast the spin catches up with its target, per second
+export const SPIN_FACTOR_MIN = 0.3;   // each leaf gets a random spin factor in this range, and a random direction
+export const SPIN_FACTOR_MAX = 1.0;
