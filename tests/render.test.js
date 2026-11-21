@@ -1,4 +1,4 @@
-// Rendering tests (steps 2 to 7). These need a real browser with WebGL2, so they only run from tests/index.html.
+// Rendering tests (steps 2 to 9). These need a real browser with WebGL2, so they only run from tests/index.html.
 // Each test draws into a hidden-size canvas, then reads pixels back and checks their color.
 
 import { test, assert } from './harness.js';
@@ -435,5 +435,75 @@ test('render: blending never makes the canvas see-through (alpha stays 255)', ()
 test('render: a bad void setting hides the void instead of failing', () => {
   const d = drawWithVoid([], { x: NaN, y: 0, discRadius: 40, ringRadius: 220 });
   assertColor(d.at(0, 0), GROUND, 'center');
+  assert(d.renderer.gl.getError() === d.renderer.gl.NO_ERROR, 'gl.getError() reported a problem');
+});
+
+// ---------- Step 9: obstacles and debug rings ----------
+
+const TEST_OBSTACLES = [
+  { x: -300, y: 0, radius: 50, kind: 'rock' },
+  { x: 300, y: 0, radius: 50, kind: 'trunk' },
+];
+
+function drawObstacles({ leaves = [], obstacles = TEST_OBSTACLES, debug = false } = {}) {
+  const canvas = makeCanvas(800, 450);
+  const renderer = createRenderer(canvas);
+  const counts = countDraws(renderer.gl);
+  renderer.setObstacles(obstacles);
+  renderer.setDebug(debug);
+  renderer.setLeaves(leaves);
+  renderer.render();
+  return { canvas, renderer, counts, at: (x, y) => pixelAtWorld(renderer, canvas, x, y) };
+}
+
+test('render: a rock is grey and a trunk is brown at their centers', () => {
+  const d = drawObstacles();
+  const rock = d.at(-300, 0);
+  const trunk = d.at(300, 0);
+  const grey = Math.max(...rock) - Math.min(...rock) < 25 && rock[0] > GROUND[0] + 30;
+  assert(grey, `rock center (${rock}) is not a grey brighter than the ground`);
+  const brown = trunk[0] > trunk[1] && trunk[1] > trunk[2] && trunk[0] > GROUND[0] + 20 && trunk[0] < 160;
+  assert(brown, `trunk center (${trunk}) is not brown`);
+  assertColor(d.at(0, 0), GROUND, 'ground between them');
+  assertColor(d.at(-300, 70), GROUND, 'just outside the rock');
+});
+
+test('render: all obstacles are one instanced draw call (plus one for the leaves)', () => {
+  const d = drawObstacles({ leaves: [{ x: 0, y: 200, angle: 0, scale: 1 }] });
+  assert(d.counts.instanced === 2 && d.counts.plain === 0,
+    `draw calls: ${d.counts.instanced} instanced, ${d.counts.plain} plain`);
+});
+
+test('render: obstacles are drawn over leaves', () => {
+  const d = drawObstacles({ leaves: [{ x: -300, y: 0, angle: 0, scale: 1 }] });
+  const c = d.at(-300, 0);
+  assert(Math.max(...c) - Math.min(...c) < 25, `center (${c}) shows the leaf, not the rock`);
+});
+
+test('render: debug off draws no outlines, debug on adds the rings', () => {
+  const leaf = { x: 0, y: 200, angle: 0, scale: 1 };
+  const off = drawObstacles({ leaves: [leaf], debug: false });
+  const on = drawObstacles({ leaves: [leaf], debug: true });
+  assert(off.counts.instanced === 2, `debug off: ${off.counts.instanced} instanced calls`);
+  assert(on.counts.instanced === 4, `debug on: ${on.counts.instanced} instanced calls (obstacle and leaf rings)`);
+  // A point just outside the rock's edge: ground without debug, ring color with debug.
+  const edgeOff = off.at(-300 + 50.5, 0);
+  const edgeOn = on.at(-300 + 50.5, 0);
+  assert(brightness(edgeOn) > brightness(edgeOff) + 40, `ring not visible at the rock edge: off (${edgeOff}), on (${edgeOn})`);
+  // The leaf's collision ring, about 23.3 units from its center.
+  let ring = 0;
+  for (let r = 21; r <= 26; r += 0.5) ring = Math.max(ring, brightness(on.at(0, 200 + r)));
+  assert(ring > brightness(GROUND) + 40, `leaf ring not visible (brightest ${ring})`);
+});
+
+test('render: no obstacles draws none, bad obstacles are skipped', () => {
+  const d = drawObstacles({ obstacles: [{ x: NaN, y: 0, radius: 50 }, { x: 0, y: 0, radius: -1 }, null] });
+  assert(d.counts.instanced === 0, `drew ${d.counts.instanced} instanced calls`);
+  assertColor(d.at(0, 0), GROUND, 'center');
+  assert(d.renderer.gl.getError() === d.renderer.gl.NO_ERROR, 'gl.getError() reported a problem');
+});
+
+test('render: obstacles and debug rings make no WebGL errors', () => {
+  const d = drawObstacles({ leaves: spawnLeaves(1000, 3), debug: true });
   assert(d.renderer.gl.getError() === d.renderer.gl.NO_ERROR, 'gl.getError() reported a problem');
 });

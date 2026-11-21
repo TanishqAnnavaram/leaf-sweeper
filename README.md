@@ -26,6 +26,7 @@ node tests/noise.test.js
 node tests/void.test.js
 node tests/game.test.js
 node tests/control.test.js
+node tests/obstacles.test.js
 node tests/play.test.js
 ```
 
@@ -33,7 +34,7 @@ run the tests that need no browser. `play.test.js` has two scripted players (ins
 
 ## How to play
 
-Hold the mouse button (or a finger) on the field: the wind blows from that spot toward the void, stronger the farther away you hold. Let go and the wind dies down. Blow the leaves into the dark void in the middle. Leaves inside the faint ring are pulled in; leaves that reach the center spiral in and are cleared. Clear every leaf to win; your time is the score. Tip: gather leaves in a corner, then blow them diagonally through the void.
+Hold the mouse button (or a finger) on the field: the wind blows from that spot toward the void, stronger the farther away you hold. Let go and the wind dies down. Blow the leaves into the dark void in the middle. Leaves inside the faint ring are pulled in; leaves that reach the center spiral in and are cleared. Rocks and tree trunks block the way; leaves bounce off them. Clear every leaf to win; your time is the score. Tip: gather leaves in a corner, then blow them diagonally through the void.
 
 ## Controls
 
@@ -41,6 +42,7 @@ Hold the mouse button (or a finger) on the field: the wind blows from that spot 
 - Compass (bottom right): shows where the wind blows and how strong it is.
 - Bottom bar: cleared leaves, progress, the timer (it starts with the first wind), Reset (new layout) and +100 leaves.
 - `R`: reset the scene.
+- `D`: show or hide the collision circles of the obstacles (cyan) and the leaves (white).
 - `T`: show or hide the developer panel: the live wind and the Tuning folder (friction, top speed, gusts, spin, suction, void radius, Gale distance, turn rate, build time).
 - `P`: pause and unpause the simulation.
 - `F`: hide and show the FPS counter.
@@ -55,13 +57,13 @@ style.css         layout and look
 src/main.js       start-up, keys, FPS display, debug handle
 src/ui.js         developer panel (Tweakpane, press T)
 src/loop.js       game loop with a clamped time step (no WebGL)
-src/physics.js    leaf movement, wind and drag, gusts, tumbling, world edges, spawning leaves (no WebGL)
+src/physics.js    leaf movement, wind and drag, gusts, tumbling, world edges, the void, obstacles, spawning (no WebGL)
 src/noise.js      our own 3D Perlin noise for the gusts (no WebGL)
 src/game.js       counter, timer, win, how many leaves +100 may add (no WebGL)
 src/control.js    mouse-aim wind: aim, turn limit, build-up (no WebGL)
 src/random.js     seeded random numbers (no WebGL)
 src/fps.js        FPS counter (no WebGL)
-src/renderer.js   WebGL setup, instanced leaves, the void
+src/renderer.js   WebGL setup, instanced leaves, the void, instanced obstacles and debug rings
 src/shaders.js    GLSL shader code
 src/math.js       our own 3x3 matrix math (no WebGL)
 src/config.js     shared constants (world size, leaf size, time step, leaf counts)
@@ -80,4 +82,5 @@ libs/             third-party libraries: Tweakpane 4.0.5 (MIT license)
 - [x] Step 6: noise gusts and tumbling
 - [x] Step 7: the void, cleared counter, timer, win screen (first playable version)
 - [x] Step 8: mouse-aim wind (hold to blow), wind compass, Reset Scene, +100 leaves
-- [ ] Step 9 onward: see the build order
+- [x] Step 9: obstacles (rocks and trunks) with bouncing, debug circles
+- [ ] Step 10 onward: see the build order

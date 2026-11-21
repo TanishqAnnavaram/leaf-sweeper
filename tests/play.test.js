@@ -17,8 +17,12 @@ import { createWindControl, setPointer, stepWindControl } from '../src/control.j
 import {
   LEAF_COUNT, LEAF_SEED, FRICTION, WIND_MAX_SPEED, GUST_STRENGTH, GUST_SIZE, SPIN_AMOUNT,
   SUCTION_MAX, VOID_RADIUS, CAPTURE_RADIUS, VOID_X, VOID_Y, WORLD_WIDTH, WORLD_HEIGHT,
-  AIM_GALE_DISTANCE, WIND_TURN_RATE, WIND_BUILD_TIME,
+  AIM_GALE_DISTANCE, WIND_TURN_RATE, WIND_BUILD_TIME, OBSTACLES,
 } from '../src/config.js';
+
+// Step 9: single sweeps depend a lot on where the gust patches are, so each player is checked with
+// the gust clock started at these times (seconds), as if the page had been open that long.
+const GUST_CLOCKS = [0, 10, 37, 60, 123];
 
 const DT = 1 / 30;   // simulation step for the test (the game clamps to 1/30 too)
 
@@ -27,14 +31,15 @@ function bearingTo(ax, ay, bx, by) {
   return (Math.atan2(bx - ax, by - ay) * 180) / Math.PI;
 }
 
-function playScript(maxSeconds) {
+function playScript(maxSeconds, gustClock = 0) {
   const leaves = spawnLeaves(LEAF_COUNT, LEAF_SEED);
   const game = createGame(leaves.length);
   const gusts = createGusts(createNoise(LEAF_SEED));
+  gusts.time = gustClock;
   const settings = {
     bearing: 90, speed: WIND_MAX_SPEED, friction: FRICTION, gustStrength: GUST_STRENGTH,
     gustSize: GUST_SIZE, spinAmount: SPIN_AMOUNT, suction: SUCTION_MAX, voidRadius: VOID_RADIUS,
-    captureRadius: CAPTURE_RADIUS,
+    captureRadius: CAPTURE_RADIUS, obstacles: OBSTACLES,
   };
   const hw = WORLD_WIDTH / 2, hh = WORLD_HEIGHT / 2;
   const corners = [[-hw, hh], [hw, -hh], [hw, hh], [-hw, -hh]];   // alternate opposite corners
@@ -62,14 +67,17 @@ function playScript(maxSeconds) {
   return { game, left: leaves.length, seconds: t };
 }
 
-test('a scripted player clears all 1000 leaves within 5 simulated minutes', () => {
+test('a scripted player clears all 1000 leaves within 5 simulated minutes, at every gust clock', () => {
   const started = Date.now();
-  const result = playScript(300);
-  const realSeconds = ((Date.now() - started) / 1000).toFixed(1);
-  console.log(`  scripted player: cleared ${result.game.cleared} of ${result.game.total}, `
-    + `${result.left} left, game time ${result.seconds.toFixed(1)} s, real time ${realSeconds} s`);
-  assert(result.game.won, `not won: ${result.left} leaves left after ${result.seconds.toFixed(0)} s`);
-  assert(result.game.cleared === LEAF_COUNT, `cleared ${result.game.cleared}`);
+  const times = [];
+  for (const clock of GUST_CLOCKS) {
+    const result = playScript(300, clock);
+    times.push(result.game.won ? `${result.seconds.toFixed(0)}s` : `LOST (${result.left} left)`);
+    assert(result.game.won, `gust clock ${clock}: not won, ${result.left} leaves left after ${result.seconds.toFixed(0)} s`);
+    assert(result.game.cleared === LEAF_COUNT, `gust clock ${clock}: cleared ${result.game.cleared}`);
+  }
+  console.log(`  scripted player (instant aim), win times: ${times.join(' ')} `
+    + `(real time ${((Date.now() - started) / 1000).toFixed(1)} s)`);
 });
 
 // ---------- Step 8: the same plan, played with the mouse-aim controller ----------
@@ -78,16 +86,17 @@ test('a scripted player clears all 1000 leaves within 5 simulated minutes', () =
 //   gather in corner c:  hold the cursor on the opposite side of the void, 700 units out (a Gale)
 //   sweep from corner c:  hold the cursor on the corner itself (918 units out, a Gale)
 
-function playMouseScript(maxSeconds) {
+function playMouseScript(maxSeconds, gustClock = 0) {
   const leaves = spawnLeaves(LEAF_COUNT, LEAF_SEED);
   const game = createGame(leaves.length);
   const gusts = createGusts(createNoise(LEAF_SEED));
+  gusts.time = gustClock;
   const control = createWindControl();
   const settings = {
     bearing: control.bearing, speed: 0, friction: FRICTION, gustStrength: GUST_STRENGTH,
     gustSize: GUST_SIZE, spinAmount: SPIN_AMOUNT, suction: SUCTION_MAX, voidRadius: VOID_RADIUS,
     captureRadius: CAPTURE_RADIUS, topSpeed: WIND_MAX_SPEED, galeDistance: AIM_GALE_DISTANCE,
-    turnRate: WIND_TURN_RATE, buildTime: WIND_BUILD_TIME,
+    turnRate: WIND_TURN_RATE, buildTime: WIND_BUILD_TIME, obstacles: OBSTACLES,
   };
   const hw = WORLD_WIDTH / 2, hh = WORLD_HEIGHT / 2;
   const corners = [[-hw, hh], [hw, -hh], [hw, hh], [-hw, -hh]];
@@ -119,11 +128,14 @@ function playMouseScript(maxSeconds) {
   return { game, left: leaves.length, seconds: t };
 }
 
-test('a scripted player using the mouse-aim controls also wins within 5 simulated minutes', () => {
-  const result = playMouseScript(300);
-  console.log(`  mouse-aim player: cleared ${result.game.cleared} of ${result.game.total}, `
-    + `${result.left} left, game time ${result.seconds.toFixed(1)} s`);
-  assert(result.game.won, `not won: ${result.left} leaves left after ${result.seconds.toFixed(0)} s`);
+test('a scripted player using the mouse-aim controls also wins within 5 simulated minutes, at every gust clock', () => {
+  const times = [];
+  for (const clock of GUST_CLOCKS) {
+    const result = playMouseScript(300, clock);
+    times.push(result.game.won ? `${result.seconds.toFixed(0)}s` : `LOST (${result.left} left)`);
+    assert(result.game.won, `gust clock ${clock}: not won, ${result.left} leaves left after ${result.seconds.toFixed(0)} s`);
+  }
+  console.log(`  mouse-aim player, win times: ${times.join(' ')}`);
 });
 
 if (typeof process !== 'undefined' && process.versions && process.versions.node) {

@@ -114,3 +114,77 @@ void main() {
   outColor = vec4(color, alpha);
 }`;
 
+
+
+// ---------- Circles: obstacles and debug rings (step 9) ----------
+// One small program draws many circles with one instanced call. Each circle is a square
+// (2 triangles) around it; the fragment shader keeps only the pixels inside (or on the outline).
+
+// Vertex shader.
+//   aCorner      a corner of the square, from -1 to 1 (the same 4 corners for every circle)
+//   aCircle      this circle's data, read once per circle (divisor 1):
+//                  obstacles: (x, y, radius, kind)        kind 0 = rock, 1 = trunk
+//                  leaves:    (x, y, angle, scale)        the leaf buffer, read as-is for debug rings
+//   uLeafRadius  0 for obstacles; for leaf rings, the radius of a scale-1 leaf, so radius = scale * it
+//   vLocal       this pixel's offset from the circle's center, in world units
+export const circleVertex = `#version 300 es
+in vec2 aCorner;
+in vec4 aCircle;
+uniform mat3 uProjection;
+uniform float uLeafRadius;
+out vec2 vLocal;
+flat out float vRadius;
+flat out float vKind;
+
+void main() {
+  float radius = uLeafRadius > 0.0 ? abs(aCircle.w) * uLeafRadius : aCircle.z;
+  float extent = radius + 3.0;             // half the square: a little bigger than the circle, for the soft edge
+  vLocal = aCorner * extent;
+  vRadius = radius;
+  vKind = uLeafRadius > 0.0 ? 0.0 : aCircle.w;
+  vec3 clip = uProjection * vec3(aCircle.xy + vLocal, 1.0);
+  gl_Position = vec4(clip.xy, 0.0, 1.0);
+}`;
+
+// Fragment shader.
+//   uOutline 0: a filled circle. Rocks are grey and a bit darker toward the edge (a hint of a rounded
+//               top); trunks are brown with faint growth rings, from a sine of the distance.
+//   uOutline 1: only a thin ring at the radius, in uOutlineColor (debug view).
+// fwidth(d) = how much the distance changes between neighbouring pixels: about one pixel in world
+// units, used as the width of the soft edge so edges look smooth at any zoom.
+export const circleFragment = `#version 300 es
+precision highp float;
+in vec2 vLocal;
+flat in float vRadius;
+flat in float vKind;
+uniform float uOutline;
+uniform vec4 uOutlineColor;
+out vec4 outColor;
+
+void main() {
+  float d = length(vLocal);
+  float aa = max(fwidth(d), 0.001);
+  if (uOutline > 0.5) {
+    // Ring about 1.5 pixels wide, centred on the radius.
+    float ring = 1.0 - smoothstep(0.75 * aa, 1.75 * aa, abs(d - vRadius));
+    if (ring <= 0.0) {
+      discard;
+    }
+    outColor = vec4(uOutlineColor.rgb, uOutlineColor.a * ring);
+    return;
+  }
+  float inside = 1.0 - smoothstep(vRadius - aa, vRadius + aa, d);
+  if (inside <= 0.0) {
+    discard;
+  }
+  float t = d / max(vRadius, 0.001);       // 0 at the center, 1 at the edge
+  vec3 color;
+  if (vKind < 0.5) {
+    color = mix(vec3(0.50, 0.49, 0.47), vec3(0.33, 0.32, 0.31), t * t);   // rock
+  } else {
+    float rings = 0.5 + 0.5 * sin(d * 0.9);                                 // trunk growth rings
+    color = mix(vec3(0.42, 0.28, 0.16), vec3(0.34, 0.22, 0.12), rings * 0.6);
+    color = mix(color, vec3(0.24, 0.15, 0.08), smoothstep(0.85, 1.0, t)); // darker bark edge
+  }
+  outColor = vec4(color, inside);
+}`;

@@ -4,12 +4,14 @@
 // Step 5: wind and ground drag.
 // Step 6: noise gusts and tumbling.
 // Step 7: the void (suction, capture, removal).
+// Step 9: obstacles (bouncing, sub-steps against tunneling).
 
 import {
   WORLD_WIDTH, WORLD_HEIGHT, LEAF_WIDTH, LEAF_HEIGHT, MAX_DT, LEAF_START,
   MAX_LEAVES, LEAF_SEED, LEAF_SCALE_MIN, LEAF_SCALE_MAX, WIND_MAX_SPEED,
   GUST_MAX_TURN, GUST_EVOLVE, SPIN_RESPONSE, SPIN_FACTOR_MIN, SPIN_FACTOR_MAX,
   VOID_X, VOID_Y, VOID_RADIUS, SUCTION_SWIRL, CAPTURE_TIME, CAPTURE_TURNS,
+  OBSTACLES, OBSTACLE_RESTITUTION, MAX_STEP_DISTANCE,
 } from './config.js';
 import { createRandom } from './random.js';
 
@@ -60,10 +62,12 @@ export function leafRadius(scale) {
 //   suction       the void's pull at its center, in world units per second (0 = no pull)
 //   voidRadius    attraction radius: no pull farther than this from the void
 //   captureRadius a leaf closer than this to the void is caught (0 = never)
+//   obstacles     circles { x, y, radius } that leaves bounce off (broken ones are left out)
 // `gusts` (optional) is the gust state from createGusts: the noise function, the time, the drift.
 // Returns the same names plus { gusts }, every value safe to use. Settings left out are switched off.
 export function createWind({
   bearing, speed, friction, gustStrength, gustSize, spinAmount, suction, voidRadius, captureRadius,
+  obstacles,
 } = {}, gusts) {
   const safeFriction = isNumber(friction) && friction > 0 ? friction : 0;
   let vx = 0;
@@ -79,6 +83,10 @@ export function createWind({
   const strength = isNumber(gustStrength) ? Math.min(1, Math.max(0, gustStrength)) : 0;
   const size = isNumber(gustSize) && gustSize > 0 ? gustSize : 0;   // 0 = no gusts (and no divide by zero)
   const useGusts = strength > 0 && size > 0 && Boolean(gusts) && typeof gusts.noise === 'function';
+  const safeSuction = isNumber(suction) && suction > 0 ? suction : 0;
+  const safeObstacles = Array.isArray(obstacles)
+    ? obstacles.filter((o) => o && isNumber(o.x) && isNumber(o.y) && isNumber(o.radius) && o.radius > 0)
+    : [];
   return {
     vx,
     vy,
@@ -87,9 +95,14 @@ export function createWind({
     gustSize: size,
     gusts: useGusts ? gusts : null,
     spinAmount: isNumber(spinAmount) && spinAmount > 0 ? spinAmount : 0,
-    suction: isNumber(suction) && suction > 0 ? suction : 0,
+    suction: safeSuction,
     voidRadius: isNumber(voidRadius) && voidRadius > 0 ? voidRadius : 0,
     captureRadius: isNumber(captureRadius) && captureRadius > 0 ? captureRadius : 0,
+    obstacles: safeObstacles,
+    // The fastest speed any leaf can head toward in this wind: the base wind at its strongest gust,
+    // plus the full suction with its swirl. Used to decide when a leaf needs sub-steps.
+    maxTargetSpeed: Math.hypot(vx, vy) * (1 + (useGusts ? strength : 0))
+      + safeSuction * Math.hypot(1, SUCTION_SWIRL),
   };
 }
 
@@ -164,7 +177,32 @@ export function windName(speed, topSpeed = WIND_MAX_SPEED) {
 
 // Move one leaf forward in time by dt seconds. Changes the leaf in place.
 // `wind` comes from createWind. Without it, the leaf keeps its velocity (no wind, no drag, no spin).
+//
+// Tunneling guard (step 9): if the leaf could move farther than MAX_STEP_DISTANCE in this frame,
+// the frame is split into equal smaller steps. A leaf's speed only moves toward its target speed,
+// so it can never be faster than max(its speed now, the fastest target in this wind). At default
+// settings that is at most about 38.7 units per frame, under the limit, so this almost never splits.
 export function stepLeaf(leaf, dt, wind) {
+  if (!isNumber(dt) || dt <= 0) {
+    return leaf;
+  }
+  dt = Math.min(dt, MAX_DT);
+  if (leaf.captured || !wind || typeof wind !== 'object') {
+    return stepLeafOnce(leaf, dt, wind);
+  }
+  const speedNow = isNumber(leaf.vx) && isNumber(leaf.vy) ? Math.hypot(leaf.vx, leaf.vy) : 0;
+  const fastest = Math.max(speedNow, isNumber(wind.maxTargetSpeed) ? wind.maxTargetSpeed : 0);
+  // At most 8 sub-steps, so even a broken huge speed cannot stall the frame.
+  const steps = Math.min(8, Math.max(1, Math.ceil((fastest * dt) / MAX_STEP_DISTANCE)));
+  const sub = dt / steps;
+  for (let i = 0; i < steps; i++) {
+    stepLeafOnce(leaf, sub, wind);
+  }
+  return leaf;
+}
+
+// One step of stepLeaf, with no splitting.
+function stepLeafOnce(leaf, dt, wind) {
   // A dt that is missing, zero, negative, or not finite means "no time passed".
   if (!isNumber(dt) || dt <= 0) {
     return leaf;
@@ -213,6 +251,12 @@ export function stepLeaf(leaf, dt, wind) {
     // Euler step: new position = old position + velocity * time.
     leaf.x += leaf.vx * dt;
     leaf.y += leaf.vy * dt;
+  }
+
+  // Bounce off obstacles (step 9). Before the walls, so the walls always have the last word on
+  // keeping the leaf inside the world (obstacles are far enough from the walls never to disagree).
+  if (wind && Array.isArray(wind.obstacles) && wind.obstacles.length > 0) {
+    resolveObstacles(leaf, wind.obstacles);
   }
 
   // Stop at the world edge. The world runs from -W/2 to W/2 and -H/2 to H/2,
@@ -272,8 +316,9 @@ export function stepLeaf(leaf, dt, wind) {
 
 // Make `count` still leaves at random places, each fully inside the world.
 // The same seed always gives the same layout.
-// Leaves never start inside `avoidRadius` of the void, so nothing is pulled in before the player acts.
-export function spawnLeaves(count, seed = LEAF_SEED, avoidRadius = VOID_RADIUS) {
+// Leaves never start inside `avoidRadius` of the void, so nothing is pulled in before the player acts,
+// and never touching an obstacle (step 9).
+export function spawnLeaves(count, seed = LEAF_SEED, avoidRadius = VOID_RADIUS, obstacles = OBSTACLES) {
   // A bad count (NaN, Infinity, text, negative) gives no leaves. A decimal is rounded down.
   let n = (typeof count === 'number' && Number.isFinite(count)) ? Math.floor(count) : 0;
   n = Math.max(0, Math.min(n, MAX_LEAVES));
@@ -298,7 +343,7 @@ export function spawnLeaves(count, seed = LEAF_SEED, avoidRadius = VOID_RADIUS) 
     for (let attempt = 0; attempt < 100; attempt++) {
       x = (2 * random() - 1) * maxX;
       y = (2 * random() - 1) * maxY;
-      if (Math.hypot(x - VOID_X, y - VOID_Y) >= avoid) break;
+      if (Math.hypot(x - VOID_X, y - VOID_Y) >= avoid && clearOfObstacles(x, y, r, obstacles)) break;
     }
     const angle = random() * 2 * Math.PI;   // any direction, [0, 2 pi)
     // Spin direction (half clockwise, half counterclockwise) and strength.
@@ -409,4 +454,60 @@ export function removeFinished(leaves) {
     }
   }
   return removed;
+}
+
+// ---------- Step 9: obstacles ----------
+
+// True if a leaf of radius r at (x, y) does not touch any obstacle.
+function clearOfObstacles(x, y, r, obstacles) {
+  if (!Array.isArray(obstacles)) {
+    return true;
+  }
+  for (const o of obstacles) {
+    if (o && isNumber(o.x) && isNumber(o.y) && isNumber(o.radius)
+        && Math.hypot(x - o.x, y - o.y) < o.radius + r) {
+      return false;
+    }
+  }
+  return true;
+}
+
+// Push a leaf out of any obstacle it overlaps, and bounce it. Changes the leaf in place.
+// Two circles overlap when the distance between their centers is less than the sum of their radii:
+//   d < R,   where R = obstacle radius + leaf radius.
+// Then, with n = the unit vector from the obstacle's center to the leaf (the "normal"):
+//   push out:  leaf position = obstacle center + n * R          (exactly touching)
+//   bounce:    vn = v . n  (the part of the velocity along n; negative = moving into the obstacle)
+//              v = v - (1 + e) * vn * n                       (e = restitution)
+// That removes the inward part and adds back e times it, pointing outward. The sideways part of v
+// is untouched, so a leaf that hits at an angle slides around the obstacle.
+export function resolveObstacles(leaf, obstacles) {
+  if (!Array.isArray(obstacles)) {
+    return leaf;
+  }
+  const r = leafRadius(leaf.scale);
+  for (const o of obstacles) {
+    if (!o || !isNumber(o.x) || !isNumber(o.y) || !isNumber(o.radius) || o.radius <= 0) {
+      continue;   // a broken obstacle is skipped, never a source of NaN
+    }
+    const R = o.radius + r;
+    const dx = leaf.x - o.x;
+    const dy = leaf.y - o.y;
+    const d2 = dx * dx + dy * dy;
+    if (d2 >= R * R) {
+      continue;   // not touching (compared squared, so no square root for the usual case)
+    }
+    const d = Math.sqrt(d2);
+    // Exactly at the center there is no direction to push (dividing by d = 0): use +x.
+    const nx = d > 1e-9 ? dx / d : 1;
+    const ny = d > 1e-9 ? dy / d : 0;
+    leaf.x = o.x + nx * R;
+    leaf.y = o.y + ny * R;
+    const vn = leaf.vx * nx + leaf.vy * ny;
+    if (vn < 0) {
+      leaf.vx -= (1 + OBSTACLE_RESTITUTION) * vn * nx;
+      leaf.vy -= (1 + OBSTACLE_RESTITUTION) * vn * ny;
+    }
+  }
+  return leaf;
 }

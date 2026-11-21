@@ -77,3 +77,24 @@ export const AIM_GALE_DISTANCE = 600;   // world units
 // speed approaches the aim's speed with time constant WIND_BUILD_TIME (63% of the way after that time).
 export const WIND_TURN_RATE = 180;      // degrees per second
 export const WIND_BUILD_TIME = 0.3;     // seconds
+
+// Step 9: obstacles. Circles that leaves bounce off: 3 rocks and 2 tree trunks, the same every round.
+// Rock A and trunk B sit on the corner-to-void diagonals, so the easiest sweep is partly blocked.
+// All of them stay at least OBSTACLE_WALL_GAP from the walls (so a leaf is never trapped between an
+// obstacle and a wall), clear of each other, and clear of the void's ring.
+export const OBSTACLES = Object.freeze([
+  Object.freeze({ x: -400, y: 225, radius: 55, kind: 'rock' }),    // A: on the top-left diagonal
+  Object.freeze({ x: 440, y: -247, radius: 40, kind: 'trunk' }),   // B: on the bottom-right diagonal
+  Object.freeze({ x: 560, y: 120, radius: 35, kind: 'rock' }),     // C
+  Object.freeze({ x: -520, y: -170, radius: 45, kind: 'trunk' }),  // D
+  Object.freeze({ x: 60, y: 340, radius: 30, kind: 'rock' }),      // E: the smallest
+]);
+export const OBSTACLE_WALL_GAP = 60;      // world units
+// When a leaf hits an obstacle, the part of its velocity pointing into it comes back reversed and
+// multiplied by this ("restitution"): 0 = no bounce, 1 = a perfect bounce. Leaves are light: 0.5.
+export const OBSTACLE_RESTITUTION = 0.5;
+// Tunneling guard: a leaf that would move farther than this in one frame is moved in smaller steps.
+// It must stay below the smallest obstacle radius plus the smallest leaf radius (30 + 18.7 = 48.7),
+// so no leaf can ever jump past an obstacle's middle in one step. At default settings the fastest
+// leaf moves about 38.7 units per frame, so sub-steps never happen there.
+export const MAX_STEP_DISTANCE = 40;

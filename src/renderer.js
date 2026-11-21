@@ -1,9 +1,14 @@
-import { leafVertex, leafFragment, voidVertex, voidFragment } from './shaders.js';
+import {
+  leafVertex, leafFragment, voidVertex, voidFragment, circleVertex, circleFragment,
+} from './shaders.js';
 import { projection, worldRect } from './math.js';
 import { WORLD_WIDTH, WORLD_HEIGHT, LEAF_WIDTH, LEAF_HEIGHT, MAX_LEAVES } from './config.js';
 
 // Floats per leaf in the GPU buffer: x, y, angle, scale (step 4), plus fade (step 7).
 export const FLOATS_PER_LEAF = 5;
+
+// Collision radius of a scale-1 leaf: half its diagonal (the same as leafRadius in physics.js).
+const LEAF_RADIUS_1 = 0.5 * Math.sqrt(LEAF_WIDTH * LEAF_WIDTH + LEAF_HEIGHT * LEAF_HEIGHT);
 
 function isNumber(value) {
   return typeof value === 'number' && Number.isFinite(value);
@@ -190,6 +195,112 @@ export function createRenderer(canvas) {
   let leafCount = 0;          // how many leaves are packed in leafData
   let warnedTooMany = false;  // warn only once if someone asks for more than MAX_LEAVES
 
+  // ---------- Obstacles and debug rings (step 9): one circle program, instanced ----------
+  const circleProgram = createProgram(gl, circleVertex, circleFragment);
+  const cCorner = gl.getAttribLocation(circleProgram, 'aCorner');
+  const cCircle = gl.getAttribLocation(circleProgram, 'aCircle');
+  const cProjection = gl.getUniformLocation(circleProgram, 'uProjection');
+  const cLeafRadius = gl.getUniformLocation(circleProgram, 'uLeafRadius');
+  const cOutline = gl.getUniformLocation(circleProgram, 'uOutline');
+  const cOutlineColor = gl.getUniformLocation(circleProgram, 'uOutlineColor');
+
+  // The square every circle is drawn in (-1 to 1, triangle strip), shared by both VAOs below.
+  const squareBuffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, squareBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+
+  // Obstacle data: 4 floats each (x, y, radius, kind). Obstacles rarely change, so they are only
+  // uploaded when setObstacles is called, not every frame.
+  const MAX_OBSTACLES = 64;
+  const obstacleData = new Float32Array(MAX_OBSTACLES * 4);
+  const obstacleBuffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, obstacleBuffer);
+  gl.bufferData(gl.ARRAY_BUFFER, obstacleData.byteLength, gl.DYNAMIC_DRAW);
+  let obstacleCount = 0;
+
+  // VAO 1: circles from the obstacle buffer.
+  const obstacleVao = gl.createVertexArray();
+  gl.bindVertexArray(obstacleVao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, squareBuffer);
+  gl.enableVertexAttribArray(cCorner);
+  gl.vertexAttribPointer(cCorner, 2, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, obstacleBuffer);
+  gl.enableVertexAttribArray(cCircle);
+  gl.vertexAttribPointer(cCircle, 4, gl.FLOAT, false, 0, 0);
+  gl.vertexAttribDivisor(cCircle, 1);
+
+  // VAO 2: debug rings for the leaves, read straight from the leaf buffer (no copy):
+  // the first 4 of each leaf's 5 floats are (x, y, angle, scale); the shader uses x, y and scale.
+  const leafRingVao = gl.createVertexArray();
+  gl.bindVertexArray(leafRingVao);
+  gl.bindBuffer(gl.ARRAY_BUFFER, squareBuffer);
+  gl.enableVertexAttribArray(cCorner);
+  gl.vertexAttribPointer(cCorner, 2, gl.FLOAT, false, 0, 0);
+  gl.bindBuffer(gl.ARRAY_BUFFER, leafBuffer);
+  gl.enableVertexAttribArray(cCircle);
+  gl.vertexAttribPointer(cCircle, 4, gl.FLOAT, false, FLOATS_PER_LEAF * 4, 0);
+  gl.vertexAttribDivisor(cCircle, 1);
+  gl.bindVertexArray(null);
+
+  let debug = false;
+
+  // Obstacles to draw: [{ x, y, radius, kind: 'rock' | 'trunk' }]. Broken entries are skipped.
+  function setObstacles(obstacles) {
+    obstacleCount = 0;
+    if (Array.isArray(obstacles)) {
+      for (const o of obstacles) {
+        if (obstacleCount >= MAX_OBSTACLES) {
+          break;
+        }
+        if (o && isNumber(o.x) && isNumber(o.y) && isNumber(o.radius) && o.radius > 0) {
+          const i = obstacleCount * 4;
+          obstacleData[i] = o.x;
+          obstacleData[i + 1] = o.y;
+          obstacleData[i + 2] = o.radius;
+          obstacleData[i + 3] = o.kind === 'trunk' ? 1 : 0;
+          obstacleCount++;
+        }
+      }
+    }
+    if (obstacleCount > 0) {
+      gl.bindBuffer(gl.ARRAY_BUFFER, obstacleBuffer);
+      gl.bufferSubData(gl.ARRAY_BUFFER, 0, obstacleData, 0, obstacleCount * 4);
+    }
+  }
+
+  // Debug view on or off: outlines of every obstacle's collision circle and every leaf's.
+  function setDebug(on) {
+    debug = Boolean(on);
+  }
+
+  // Filled obstacles, then (in debug view) the outlines. Called after the leaves are drawn.
+  function drawCircles(proj) {
+    if (obstacleCount === 0 && !(debug && leafCount > 0)) {
+      return;
+    }
+    gl.useProgram(circleProgram);
+    gl.uniformMatrix3fv(cProjection, false, proj);
+    if (obstacleCount > 0) {
+      gl.bindVertexArray(obstacleVao);
+      gl.uniform1f(cLeafRadius, 0);
+      gl.uniform1f(cOutline, 0);
+      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, obstacleCount);
+      if (debug) {
+        gl.uniform1f(cOutline, 1);
+        gl.uniform4f(cOutlineColor, 0.35, 0.9, 1.0, 0.9);   // cyan: obstacle collision circles
+        gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, obstacleCount);
+      }
+    }
+    if (debug && leafCount > 0) {
+      gl.bindVertexArray(leafRingVao);
+      gl.uniform1f(cLeafRadius, LEAF_RADIUS_1);
+      gl.uniform1f(cOutline, 1);
+      gl.uniform4f(cOutlineColor, 1.0, 1.0, 1.0, 0.55);   // white: leaf collision circles
+      gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, leafCount);
+    }
+    gl.bindVertexArray(null);
+  }
+
   // Give the renderer the leaves to draw. The values are copied right away, so changing the
   // leaves afterwards has no effect until setLeaves is called again (the game loop does it every frame).
   function setLeaves(leaves) {
@@ -243,9 +354,14 @@ export function createRenderer(canvas) {
     // The void first, so the leaves are drawn on top of it.
     drawVoid(proj);
 
-    if (leafCount === 0) {
-      return;   // no leaves to draw
+    if (leafCount > 0) {
+      drawLeaves(proj);
     }
+    // Obstacles over the leaves (a leaf brushing a rock looks tucked under it), then debug rings.
+    drawCircles(proj);
+  }
+
+  function drawLeaves(proj) {
 
     // Send this frame's leaf data to the GPU. Only the part in use is copied:
     // bufferSubData(target, byte offset in the buffer, source array, first element, element count).
@@ -261,5 +377,5 @@ export function createRenderer(canvas) {
     gl.bindVertexArray(null);
   }
 
-  return { gl, render, setLeaves, setVoid };
+  return { gl, render, setLeaves, setVoid, setObstacles, setDebug };
 }

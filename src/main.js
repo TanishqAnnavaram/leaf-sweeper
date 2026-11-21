@@ -12,7 +12,7 @@ import {
   LEAF_COUNT, LEAF_SEED, FRICTION, WIND_MAX_SPEED,
   GUST_STRENGTH, GUST_SIZE, SPIN_AMOUNT, MAX_LEAVES,
   VOID_X, VOID_Y, VOID_RADIUS, CAPTURE_RADIUS, SUCTION_MAX, VOID_DISC_RADIUS,
-  AIM_GALE_DISTANCE, WIND_TURN_RATE, WIND_BUILD_TIME,
+  AIM_GALE_DISTANCE, WIND_TURN_RATE, WIND_BUILD_TIME, OBSTACLES,
 } from './config.js';
 
 const canvas = document.querySelector('#game');
@@ -40,6 +40,8 @@ function showError(err) {
 
 try {
   const renderer = createRenderer(canvas);
+  renderer.setObstacles(OBSTACLES);   // they never move, so they are sent to the GPU once
+  let debugView = false;              // D: collision circles of obstacles and leaves
   let leaves = spawnLeaves(LEAF_COUNT, LEAF_SEED);   // 1000 still leaves, same layout every load
   let game = createGame(leaves.length);              // counter, timer, win
   let round = 0;          // each reset uses a new seed, so each round has a new layout
@@ -67,6 +69,7 @@ try {
     galeDistance: AIM_GALE_DISTANCE, // cursor distance from the void that gives a Gale
     turnRate: WIND_TURN_RATE,      // how fast the wind can turn, degrees per second
     buildTime: WIND_BUILD_TIME,    // how fast the wind builds up and dies down, seconds
+    obstacles: OBSTACLES,          // rocks and trunks the leaves bounce off (step 9)
   };
   const pane = createControls(settings);
   pane.hidden = true;   // a developer panel: hidden until T is pressed
@@ -269,7 +272,8 @@ try {
   const loop = createLoop(callbacks);
 
   // ---------- Keys ----------
-  // P pauses, F shows or hides the FPS counter, T the developer panel, R resets the scene.
+  // P pauses, F shows or hides the FPS counter, T the developer panel, R resets the scene,
+  // D shows or hides the collision circles.
   window.addEventListener('keydown', (e) => {
     // Ignore held keys, and keys typed into a text box (the developer panel has number boxes).
     if (e.repeat || (e.target instanceof HTMLElement && e.target.closest('input, textarea'))) {
@@ -283,6 +287,9 @@ try {
       pane.hidden = !pane.hidden;
     } else if (e.code === 'KeyR') {
       resetScene();
+    } else if (e.code === 'KeyD') {
+      debugView = !debugView;
+      renderer.setDebug(debugView);
     }
   });
 
