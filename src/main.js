@@ -5,6 +5,7 @@ import {
 import { createGame, updateGame, addLeavesToGame, formatTime, leavesToAdd } from './game.js';
 import { createWindControl, setPointer, stepWindControl, pointerToWorld } from './control.js';
 import { createNoise } from './noise.js';
+import { createCrowd, countCells, shelterLeaves, spreadLeaves } from './crowd.js';
 import { createLoop } from './loop.js';
 import { createFpsCounter } from './fps.js';
 import { createControls } from './ui.js';
@@ -12,7 +13,7 @@ import {
   LEAF_COUNT, LEAF_SEED, FRICTION, WIND_MAX_SPEED,
   GUST_STRENGTH, GUST_SIZE, SPIN_AMOUNT, MAX_LEAVES,
   VOID_X, VOID_Y, VOID_RADIUS, CAPTURE_RADIUS, SUCTION_MAX, VOID_DISC_RADIUS,
-  AIM_GALE_DISTANCE, WIND_TURN_RATE, WIND_BUILD_TIME, OBSTACLES,
+  AIM_GALE_DISTANCE, WIND_TURN_RATE, WIND_BUILD_TIME, OBSTACLES, PILE_CAP, SPREAD_SPEED, SHELTER,
 } from './config.js';
 
 const canvas = document.querySelector('#game');
@@ -71,7 +72,11 @@ try {
     turnRate: WIND_TURN_RATE,      // how fast the wind can turn, degrees per second
     buildTime: WIND_BUILD_TIME,    // how fast the wind builds up and dies down, seconds
     obstacles: OBSTACLES,          // rocks and trunks the leaves bounce off (step 9)
+    pileCap: PILE_CAP,             // step 9b: leaves allowed in one 16-unit square before they spread
+    spreadSpeed: SPREAD_SPEED,     // how fast an overfull square pushes its leaves apart, units per second
+    shelter: SHELTER,              // wind fraction for leaves under the top ones in a pile
   };
+  const crowd = createCrowd();     // step 9b: the grid the pile rules count leaves in (reused every frame)
   const pane = createControls(settings);
   pane.hidden = true;   // a developer panel: hidden until T is pressed
 
@@ -246,9 +251,16 @@ try {
       settings.bearing = control.bearing;
       settings.speed = control.speed;
       const wind = createWind(settings, gusts);   // once per frame, shared by every leaf
+      // Step 9b, pile rules: leaves under the top ones of a crowded square are sheltered from the wind,
+      const rules = { cap: settings.pileCap, spreadSpeed: settings.spreadSpeed, shelter: settings.shelter, obstacles: settings.obstacles };
+      countCells(crowd, leaves);
+      shelterLeaves(crowd, leaves, rules);
       for (const leaf of leaves) {
         stepLeaf(leaf, dt, wind);   // each leaf reads its own gust from the noise inside stepLeaf
       }
+      // and after moving, overfull squares push their leaves apart (so a pile is a lump, never a point).
+      countCells(crowd, leaves);
+      spreadLeaves(crowd, leaves, dt, rules);
       advanceGusts(gusts, wind, dt);   // then time moves on and the gust pattern drifts downwind
       const removed = removeFinished(leaves);   // leaves the void has finished with (swap-and-pop)
       updateGame(game, { dt, windSpeed: settings.speed, removed, remaining: leaves.length });

@@ -8,7 +8,7 @@ import { Pane } from '../libs/tweakpane-4.0.5.min.js';
 import { windName } from './physics.js';
 
 // settings: { bearing, speed, friction, topSpeed, gustStrength, gustSize, spinAmount, suction,
-//   voidRadius, galeDistance, turnRate, buildTime }. The tuning sliders change these values in place.
+//   voidRadius, galeDistance, turnRate, buildTime, pileCap, spreadSpeed, shelter }. The tuning sliders change these values in place.
 // Adds a read-only `strength` property (Calm, Breeze, Wind, Gale) that the panel displays.
 export function createControls(settings) {
   const pane = new Pane({ title: 'Developer (T)' });   // appears in the top right corner of the page
@@ -38,6 +38,10 @@ export function createControls(settings) {
   tuning.addBinding(settings, 'galeDistance', { label: 'gale distance', min: 200, max: 900, step: 10 });
   tuning.addBinding(settings, 'turnRate', { label: 'turn rate', min: 45, max: 720, step: 15 });
   tuning.addBinding(settings, 'buildTime', { label: 'build time', min: 0, max: 1.5, step: 0.05 });
+  // Step 9b: pile rules (leaves per 16-unit square, how fast full squares spread, shelter under the top).
+  tuning.addBinding(settings, 'pileCap', { label: 'pile cap', min: 2, max: 30, step: 1 });
+  tuning.addBinding(settings, 'spreadSpeed', { label: 'spread speed', min: 0, max: 600, step: 10 });
+  tuning.addBinding(settings, 'shelter', { label: 'shelter', min: 0, max: 1, step: 0.05 });
 
 
   return pane;

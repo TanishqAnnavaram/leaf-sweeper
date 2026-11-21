@@ -115,3 +115,13 @@ export const MAX_STEP_DISTANCE = 40;
 
 // Step 10b: the ground texture. A fixed seed for its noise, so the ground is the same every round.
 export const GROUND_SEED = 20261120;
+
+// Step 9b: pile rules against the corner-pile exploit (see src/crowd.js).
+// The world is cut into CROWD_CELL x CROWD_CELL squares. A square holds up to PILE_CAP leaves: a leaf
+// covers about 365 square units, so 8 leaves in a 256-square-unit square is about 11 leaves on top of
+// each other. Leaves in a fuller square are pushed apart at up to SPREAD_SPEED units per second, and
+// only the top PILE_CAP feel the full wind; the others feel SHELTER times the wind.
+export const CROWD_CELL = 16;      // world units
+export const PILE_CAP = 8;         // leaves per square
+export const SPREAD_SPEED = 180;   // world units per second (6 units per frame at 30 FPS)
+export const SHELTER = 0.3;        // wind fraction for leaves under the top ones

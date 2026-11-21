@@ -29,6 +29,7 @@ node tests/control.test.js
 node tests/obstacles.test.js
 node tests/leafmesh.test.js
 node tests/tint.test.js
+node tests/crowd.test.js
 node tests/play.test.js
 ```
 
@@ -36,7 +37,7 @@ run the tests that need no browser. `play.test.js` has two scripted players (ins
 
 ## How to play
 
-Hold the mouse button (or a finger) on the field: the wind blows from that spot toward the void, stronger the farther away you hold. Let go and the wind dies down. Blow the leaves into the dark void in the middle. Leaves inside the faint ring are pulled in; leaves that reach the center spiral in and are cleared. Rocks and tree trunks block the way; leaves bounce off them. Clear every leaf to win; your time is the score. Tip: gather leaves in a corner, then blow them diagonally through the void.
+Hold the mouse button (or a finger) on the field: the wind blows from that spot toward the void, stronger the farther away you hold. Let go and the wind dies down. Blow the leaves into the dark void in the middle. Leaves inside the faint ring are pulled in; leaves that reach the center spiral in and are cleared. Rocks and tree trunks block the way; leaves bounce off them. Piles never squeeze into one point: crowded leaves spread out, and the ones underneath are sheltered from the wind, so a big pile peels apart as you push it. Clear every leaf to win; your time is the score. Tip: gather leaves in a corner, then blow them diagonally through the void.
 
 ## Controls
 
@@ -64,6 +65,7 @@ src/physics.js    leaf movement, wind and drag, gusts, tumbling, world edges, th
 src/noise.js      our own 3D Perlin noise for the gusts and (on the GPU) the ground (no WebGL)
 src/game.js       counter, timer, win, how many leaves +100 may add (no WebGL)
 src/control.js    mouse-aim wind: aim, turn limit, build-up (no WebGL)
+src/crowd.js      pile rules: leaves per square, spreading, shelter (no WebGL)
 src/random.js     seeded random numbers (no WebGL)
 src/fps.js        FPS counter (no WebGL)
 src/renderer.js   WebGL setup, the ground baked into a texture, instanced leaves, the void, instanced obstacles and debug rings
@@ -87,6 +89,7 @@ libs/             third-party libraries: Tweakpane 4.0.5 (MIT license)
 - [x] Step 7: the void, cleared counter, timer, win screen (first playable version)
 - [x] Step 8: mouse-aim wind (hold to blow), wind compass, Reset Scene, +100 leaves
 - [x] Step 9: obstacles (rocks and trunks) with bouncing, debug circles
+- [x] Step 9b: pile rules, so the corner-pile trick no longer clears the field in seconds (built after 10b)
 - [x] Step 10a: Bézier leaf shape and autumn colors, gray-box look on G
 - [x] Step 10b: ground texture (an autumn lawn from our own noise on the GPU, baked once)
 - [ ] Step 10c onward: see the build order

@@ -6,6 +6,7 @@
 // Step 7: the void (suction, capture, removal).
 // Step 9: obstacles (bouncing, sub-steps against tunneling).
 // Step 10a: each leaf's tint (its autumn color), and the tighter collision radius of the leaf shape.
+// Step 9b (built after 10b): a sheltered leaf in a pile feels less wind (windScale, set by crowd.js).
 
 import {
   WORLD_WIDTH, WORLD_HEIGHT, LEAF_RADIUS, MAX_DT, LEAF_START, TINT_SEED_OFFSET,
@@ -237,8 +238,11 @@ function stepLeafOnce(leaf, dt, wind) {
     // Plus the void's pull, which works the same way: a speed the leaf heads toward.
     const own = leafWind(wind, leaf.x, leaf.y);
     const pull = suctionAt(wind, leaf.x, leaf.y);
-    const wx = own.vx + pull.vx;
-    const wy = own.vy + pull.vy;
+    // Step 9b: a leaf under others in a pile is sheltered and feels only part of the wind (windScale,
+    // set by crowd.js; missing or broken counts as 1, kept in [0, 1]). The void's pull is not reduced.
+    const ws = isNumber(leaf.windScale) ? Math.min(1, Math.max(0, leaf.windScale)) : 1;
+    const wx = own.vx * ws + pull.vx;
+    const wy = own.vy * ws + pull.vy;
     const decay = Math.exp(-f * dt);
     // Position, also exact: the integral of v(t) over the step,
     //   x_new = x + W * dt + (v - W) * (1 - e^(-f * dt)) / f      (f > 0, so no divide by zero)
