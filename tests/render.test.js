@@ -1,12 +1,14 @@
-// Rendering tests (steps 2 to 10a). These need a real browser with WebGL2, so they only run from tests/index.html.
+// Rendering tests (steps 2 to 10b). These need a real browser with WebGL2, so they only run from tests/index.html.
 // Each test draws into a hidden-size canvas, then reads pixels back and checks their color.
 // Steps 2 to 9 test the gray-box look (orange rectangles), which the G key still shows, so they use
-// createGrayRenderer. The step 10a tests at the end check the new leaf shape and colors.
+// createGrayRenderer. The step 10a tests check the new leaf shape and colors, the 10b tests the ground.
 
 import { test, assert } from './harness.js';
-import { createRenderer } from '../src/renderer.js';
+import { createRenderer, createProgram, createNoiseTexture } from '../src/renderer.js';
+import { perlinGlsl } from '../src/shaders.js';
+import { createNoise, noiseTable } from '../src/noise.js';
 import { projection, transformPoint } from '../src/math.js';
-import { WORLD_WIDTH, WORLD_HEIGHT, MAX_LEAVES, LEAF_WIDTH, LEAF_HEIGHT } from '../src/config.js';
+import { WORLD_WIDTH, WORLD_HEIGHT, MAX_LEAVES, LEAF_WIDTH, LEAF_HEIGHT, GROUND_SEED } from '../src/config.js';
 import { buildLeafMesh, FLOATS_PER_VERTEX } from '../src/leafmesh.js';
 import { createLeaf, stepLeaf, spawnLeaves, createWind } from '../src/physics.js';
 import { createLoop } from '../src/loop.js';
@@ -542,15 +544,20 @@ function halfWidthAt(x) {
 }
 
 // Draw leaves with the new look (the default) on a 1600 x 900 canvas: 1 pixel per world unit.
+// Step 10b: the ground is no longer one color, so a first frame with no leaves is read back, and
+// d.ground(x, y) gives the empty ground at any point. The draw counts start after that frame.
 function drawLeafLook(leaves, { grayBox = false, debug = false } = {}) {
   const canvas = makeCanvas(1600, 900);
   const renderer = createRenderer(canvas);
-  const counts = countDraws(renderer.gl);
   if (grayBox) renderer.setGrayBox(true);
   renderer.setDebug(debug);
+  renderer.setLeaves([]);
+  renderer.render();
+  const ground = readAll(renderer, canvas);
+  const counts = countDraws(renderer.gl);
   renderer.setLeaves(leaves);
   renderer.render();
-  return { canvas, renderer, counts, at: (x, y) => pixelAtWorld(renderer, canvas, x, y) };
+  return { canvas, renderer, counts, ground, at: (x, y) => pixelAtWorld(renderer, canvas, x, y) };
 }
 
 // A warm autumn color: red is the strongest channel and clearly brighter than the ground.
@@ -577,8 +584,8 @@ test('render 10a: the drawn shape follows the mesh (inside the edge is leaf, out
     const hw = halfWidthAt(x);
     const inside = d.at(4 * x, 4 * hw * 0.6);
     assert(isWarm(inside), `along ${along}: inside the edge is not leaf (${inside})`);
-    assertColor(d.at(4 * x, 4 * hw + 3), GROUND, `along ${along}: just outside the edge`);
-    assertColor(d.at(4 * x, -(4 * hw + 3)), GROUND, `along ${along}: just outside the lower edge`);
+    assertColor(d.at(4 * x, 4 * hw + 3), d.ground(4 * x, 4 * hw + 3), `along ${along}: just outside the edge`);
+    assertColor(d.at(4 * x, -(4 * hw + 3)), d.ground(4 * x, -(4 * hw + 3)), `along ${along}: just outside the lower edge`);
   }
 });
 
@@ -587,16 +594,18 @@ test('render 10a: the corners of the old rectangle are now ground', () => {
   const cx = 4 * LEAF_WIDTH * 0.45;
   const cy = 4 * LEAF_HEIGHT * 0.45;
   for (const [x, y] of [[cx, cy], [-cx, cy], [cx, -cy], [-cx, -cy]]) {
-    assertColor(d.at(x, y), GROUND, `corner (${x}, ${y})`);
+    assertColor(d.at(x, y), d.ground(x, y), `corner (${x}, ${y})`);
   }
 });
 
 test('render 10a: the stem is drawn (not ground) and so is the narrow part near the tip', () => {
   const d = drawLeafLook([{ x: 0, y: 0, angle: 0, scale: 4, tint: 0.5 }]);
-  const stem = d.at(4 * (-LEAF_WIDTH / 2 + 3), 0);   // 3 units in from the stem end, on the center line
-  assert(Math.abs(brightness(stem) - brightness(GROUND)) > 30, `stem (${stem}) looks like ground`);
-  const nearTip = d.at(4 * LEAF_WIDTH * 0.42, 0);
-  assert(brightness(nearTip) > brightness(GROUND) + 60, `near the tip (${nearTip}) looks like ground`);
+  const stemX = 4 * (-LEAF_WIDTH / 2 + 3);   // 3 units in from the stem end, on the center line
+  const stem = d.at(stemX, 0);
+  assert(Math.abs(brightness(stem) - brightness(d.ground(stemX, 0))) > 30, `stem (${stem}) looks like ground`);
+  const tipX = 4 * LEAF_WIDTH * 0.42;
+  const nearTip = d.at(tipX, 0);
+  assert(brightness(nearTip) > brightness(d.ground(tipX, 0)) + 60, `near the tip (${nearTip}) looks like ground`);
 });
 
 test('render 10a: two tints give clearly different colors', () => {
@@ -634,11 +643,13 @@ test('render 10a: the midrib is lighter than the blade beside it', () => {
 test('render 10a: fade still works (0 is invisible, 0.5 is between leaf and ground)', () => {
   const off = 4 * 0.5 * halfWidthAt(0);
   const solid = drawLeafLook([{ x: 0, y: 0, angle: 0, scale: 4, tint: 0.5, fade: 1 }]).at(0, off);
-  const half = drawLeafLook([{ x: 0, y: 0, angle: 0, scale: 4, tint: 0.5, fade: 0.5 }]).at(0, off);
-  const gone = drawLeafLook([{ x: 0, y: 0, angle: 0, scale: 4, tint: 0.5, fade: 0 }]).at(0, off);
-  assertColor(gone, GROUND, 'fade 0');
+  const halfLook = drawLeafLook([{ x: 0, y: 0, angle: 0, scale: 4, tint: 0.5, fade: 0.5 }]);
+  const half = halfLook.at(0, off);
+  const ground = halfLook.ground(0, off);
+  const goneLook = drawLeafLook([{ x: 0, y: 0, angle: 0, scale: 4, tint: 0.5, fade: 0 }]);
+  assertColor(goneLook.at(0, off), goneLook.ground(0, off), 'fade 0');
   for (let i = 0; i < 3; i++) {
-    assert(Math.abs(half[i] - (solid[i] + GROUND[i]) / 2) <= 4,
+    assert(Math.abs(half[i] - (solid[i] + ground[i]) / 2) <= 4,
       `fade 0.5 (${half}) is not halfway between (${solid}) and the ground`);
   }
 });
@@ -649,18 +660,22 @@ test('render 10a: G (setGrayBox) switches between the rectangle and the leaf sha
   const gray = drawLeafLook([leaf], { grayBox: true });
   assertLeafColor(gray.at(...corner), 'gray-box: the rectangle corner');
   gray.renderer.setGrayBox(false);
+  gray.renderer.setLeaves([]);
   gray.renderer.render();
-  assertColor(gray.at(...corner), GROUND, 'back to the new look: the corner is ground');
+  const ground = gray.at(...corner);   // the new look's ground there, with no leaf
+  gray.renderer.setLeaves([leaf]);
+  gray.renderer.render();
+  assertColor(gray.at(...corner), ground, 'back to the new look: the corner is ground');
 });
 
-test('render 10a: 1000 leaves are still one draw call, and every leaf center is warm', () => {
+test('render 10a: 1000 leaves are still one draw call (plus one for the ground), and every leaf center is warm', () => {
   const leaves = spawnLeaves(1000, 11);
   const d = drawLeafLook(leaves);
   const at = readAll(d.renderer, d.canvas);
   let cold = 0;
   for (const leaf of leaves) if (!isWarm(at(leaf.x, leaf.y))) cold++;
   assert(cold === 0, `${cold} leaf centers are not a warm color`);
-  assert(d.counts.instanced === 1 && d.counts.plain === 0,
+  assert(d.counts.instanced === 1 && d.counts.plain === 1,
     `draw calls: ${d.counts.instanced} instanced, ${d.counts.plain} plain`);
   assert(d.counts.lastInstances === 1000, `instance count ${d.counts.lastInstances}`);
 });
@@ -668,9 +683,10 @@ test('render 10a: 1000 leaves are still one draw call, and every leaf center is 
 test('render 10a: the debug ring sits at the tight radius (16), not the old one (23.3)', () => {
   const d = drawLeafLook([{ x: 0, y: 200, angle: 0, scale: 1, tint: 0.5 }], { debug: true });
   let ring = 0;
-  for (let r = 14; r <= 18; r += 0.5) ring = Math.max(ring, brightness(d.at(0, 200 + r)));
-  assert(ring > brightness(GROUND) + 40, `ring not visible near 16 (brightest ${ring})`);
-  for (let r = 21; r <= 25; r += 1) assertColor(d.at(0, 200 + r), GROUND, `r = ${r}`);
+  // How much brighter than the empty ground the ring makes a pixel.
+  for (let r = 14; r <= 18; r += 0.5) ring = Math.max(ring, brightness(d.at(0, 200 + r)) - brightness(d.ground(0, 200 + r)));
+  assert(ring > 40, `ring not visible near 16 (at most ${ring} brighter than the ground)`);
+  for (let r = 21; r <= 25; r += 1) assertColor(d.at(0, 200 + r), d.ground(0, 200 + r), `r = ${r}`);
 });
 
 test('render 10a: no WebGL errors in either look', () => {
@@ -679,4 +695,184 @@ test('render 10a: no WebGL errors in either look', () => {
     const d = drawLeafLook(leaves, { grayBox, debug: true });
     assert(d.renderer.gl.getError() === d.renderer.gl.NO_ERROR, `gl.getError() reported a problem (gray-box ${grayBox})`);
   }
+});
+
+// ---------- Step 10b: the ground texture ----------
+
+// A full-world canvas with the new look and nothing on it: only the ground (and bars).
+function drawGround(cssWidth = 800, cssHeight = 450) {
+  const canvas = makeCanvas(cssWidth, cssHeight);
+  const renderer = createRenderer(canvas);
+  const counts = countDraws(renderer.gl);
+  renderer.setLeaves([]);
+  renderer.render();
+  return { canvas, renderer, counts, at: (x, y) => pixelAtWorld(renderer, canvas, x, y) };
+}
+
+// 400 ground samples on a 20 x 20 grid over the world (inside the border).
+function groundSamples(d) {
+  const at = readAll(d.renderer, d.canvas);
+  const out = [];
+  for (let i = 0; i < 20; i++) {
+    for (let j = 0; j < 20; j++) out.push(at(-760 + i * 80, -430 + j * 45));
+  }
+  return out;
+}
+
+test('render 10b: the GPU noise matches our JavaScript noise (50 points, within 0.01)', () => {
+  // A small program that writes perlin(point) for 50 points into a 50 x 1 canvas, one point per pixel,
+  // stored as (noise + 1) / 2 in the red channel (8 bits: steps of 0.008 in noise units).
+  const canvas = document.createElement('canvas');
+  canvas.width = 50;
+  canvas.height = 1;
+  const gl = canvas.getContext('webgl2');
+  const points = [];
+  for (let i = 0; i < 50; i++) points.push([(i * 13.37) % 97 - 48.5, (i * 7.91) % 61 - 30.2, (i * 0.731) % 11]);
+  const program = createProgram(gl,
+    `#version 300 es
+    in vec2 aCorner;
+    void main() { gl_Position = vec4(aCorner, 0.0, 1.0); }`,
+    `#version 300 es
+    precision highp float;
+    precision highp int;
+    ${perlinGlsl}
+    uniform vec3 uPoints[50];
+    out vec4 outColor;
+    void main() {
+      float n = perlin(uPoints[int(gl_FragCoord.x)]);
+      outColor = vec4((n + 1.0) * 0.5, 0.0, 0.0, 1.0);
+    }`);
+  gl.useProgram(program);
+  const permTexture = createNoiseTexture(gl, noiseTable(GROUND_SEED));
+  gl.activeTexture(gl.TEXTURE0);
+  gl.bindTexture(gl.TEXTURE_2D, permTexture);
+  gl.uniform1i(gl.getUniformLocation(program, 'uPerm'), 0);
+  gl.uniform3fv(gl.getUniformLocation(program, 'uPoints'), new Float32Array(points.flat()));
+  const buffer = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+  const loc = gl.getAttribLocation(program, 'aCorner');
+  gl.enableVertexAttribArray(loc);
+  gl.vertexAttribPointer(loc, 2, gl.FLOAT, false, 0, 0);
+  gl.viewport(0, 0, 50, 1);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+  const pixels = new Uint8Array(50 * 4);
+  gl.readPixels(0, 0, 50, 1, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+  const noise = createNoise(GROUND_SEED);
+  let worst = 0;
+  points.forEach((p, i) => {
+    const gpu = (pixels[i * 4] / 255) * 2 - 1;
+    worst = Math.max(worst, Math.abs(gpu - noise(...p)));
+  });
+  assert(worst <= 0.01, `largest difference ${worst.toFixed(4)}`);
+  assert(gl.getError() === gl.NO_ERROR, 'gl.getError() reported a problem');
+  const lose = gl.getExtension('WEBGL_lose_context');
+  if (lose) lose.loseContext();
+});
+
+test('render 10b: the ground is not flat (400 samples vary clearly)', () => {
+  const samples = groundSamples(drawGround()).map(brightness);
+  const mean = samples.reduce((a, b) => a + b, 0) / samples.length;
+  const sd = Math.sqrt(samples.reduce((a, b) => a + (b - mean) * (b - mean), 0) / samples.length);
+  const range = Math.max(...samples) - Math.min(...samples);
+  assert(range > 20 && sd > 4, `range ${range}, standard deviation ${sd.toFixed(1)}`);
+});
+
+test('render 10b: the ground is green to brown (blue lowest, not grey, more green than red on average)', () => {
+  const samples = groundSamples(drawGround());
+  let red = 0, green = 0;
+  for (const c of samples) {
+    assert(c[2] <= c[0] && c[2] <= c[1], `(${c}): blue is not the lowest channel`);
+    assert(Math.max(...c) - Math.min(...c) >= 8, `(${c}) is grey`);
+    red += c[0];
+    green += c[1];
+  }
+  assert(green > red, `average red ${(red / 400).toFixed(1)}, green ${(green / 400).toFixed(1)}`);
+});
+
+test('render 10b: the ground is darker than the darkest leaf color, so leaves stand out', () => {
+  // The darkest leaf body color: crimson (0.62, 0.11, 0.09) at the lowest brightness 0.92.
+  const darkestLeaf = (0.62 + 0.11 + 0.09) * 0.92 * 255;
+  const brightest = Math.max(...groundSamples(drawGround()).map(brightness));
+  assert(brightest < darkestLeaf - 15, `brightest ground ${brightest}, darkest leaf ${darkestLeaf.toFixed(0)}`);
+});
+
+test('render 10b: the ground is darker at the world border than 150 units inside it', () => {
+  const d = drawGround(1600, 900);
+  const at = readAll(d.renderer, d.canvas);
+  let edge = 0, inner = 0, n = 0;
+  for (let x = -780; x <= 780; x += 10) {
+    for (const s of [1, -1]) {
+      edge += brightness(at(x * 0.99, s * 447));
+      inner += brightness(at(x * 0.8, s * 297));
+      n++;
+    }
+  }
+  for (let y = -430; y <= 430; y += 10) {
+    for (const s of [1, -1]) {
+      edge += brightness(at(s * 797, y * 0.99));
+      inner += brightness(at(s * 647, y * 0.65));
+      n++;
+    }
+  }
+  assert(edge / n < 0.95 * (inner / n), `border average ${(edge / n).toFixed(1)}, inside ${(inner / n).toFixed(1)}`);
+});
+
+test('render 10b: the same ground every frame and on a new renderer', () => {
+  const a = drawGround();
+  const first = groundSamples(a);
+  a.renderer.render();
+  const second = groundSamples(a);
+  const b = drawGround();
+  const fresh = groundSamples(b);
+  first.forEach((c, i) => {
+    assertColor(second[i], c, `sample ${i}, second frame`);
+    assertColor(fresh[i], c, `sample ${i}, new renderer`);
+  });
+});
+
+test('render 10b: the ground is baked once, and again only when the size changes', () => {
+  const d = drawGround(800, 450);
+  assert(d.renderer.groundBakes() === 1, `bakes after the first frame: ${d.renderer.groundBakes()}`);
+  d.renderer.render();
+  d.renderer.render();
+  assert(d.renderer.groundBakes() === 1, `bakes after 3 frames: ${d.renderer.groundBakes()}`);
+  d.canvas.style.width = '640px';
+  d.canvas.style.height = '360px';
+  d.renderer.render();
+  d.renderer.render();
+  assert(d.renderer.groundBakes() === 2, `bakes after a resize and 2 frames: ${d.renderer.groundBakes()}`);
+});
+
+test('render 10b: each frame draws the ground with one plain draw call (the bake adds one, once)', () => {
+  const d = drawGround();
+  assert(d.counts.plain === 2 && d.counts.instanced === 0, `first frame: ${d.counts.plain} plain, ${d.counts.instanced} instanced`);
+  d.renderer.render();
+  assert(d.counts.plain === 3, `second frame added ${d.counts.plain - 2} plain calls`);
+});
+
+test('render 10b: the bars outside the world stay flat', () => {
+  const d = drawGround(1000, 300);
+  assertColor(d.at(-1500, 0), BAR, 'left bar');
+  assertColor(d.at(1500, 0), BAR, 'right bar');
+});
+
+test('render 10b: G brings back the flat ground, with no bake and no ground draw call', () => {
+  const canvas = makeCanvas(800, 450);
+  const renderer = createGrayRenderer(canvas);
+  const counts = countDraws(renderer.gl);
+  renderer.setLeaves([]);
+  renderer.render();
+  for (const [x, y] of [[-700, 400], [0, 0], [500, -300]]) {
+    assertColor(pixelAtWorld(renderer, canvas, x, y), GROUND, `(${x}, ${y})`);
+  }
+  assert(counts.plain === 0 && renderer.groundBakes() === 0, `${counts.plain} plain calls, ${renderer.groundBakes()} bakes`);
+});
+
+test('render 10b: no WebGL errors with the ground, leaves, void, obstacles, and debug rings', () => {
+  const d = drawLeafLook(spawnLeaves(300, 4), { debug: true });
+  d.renderer.setVoid(VOID);
+  d.renderer.setObstacles(TEST_OBSTACLES);
+  d.renderer.render();
+  assert(d.renderer.gl.getError() === d.renderer.gl.NO_ERROR, 'gl.getError() reported a problem');
 });

@@ -279,3 +279,150 @@ void main() {
   }
   outColor = vec4(color, inside);
 }`;
+
+
+// ---------- The ground (step 10b) ----------
+// The ground never changes, so it is drawn ("baked") once into a texture, and every frame only draws
+// that texture on one square. Baking uses a framebuffer: a target that draws into a texture instead
+// of onto the screen.
+
+// Our 3D Perlin noise (src/noise.js), the same steps in GLSL. The shuffled 0 to 255 table comes in as a
+// 256 x 1 texture, uPerm (one byte per texel, read back as value / 255). Because the table and the steps
+// are the same, perlin(p) here gives the same value as noise(x, y, z) in JavaScript (a test checks it).
+// Included in other shaders as text, so it has no "#version" line of its own.
+export const perlinGlsl = `
+uniform highp sampler2D uPerm;
+
+// perm[i] in noise.js: the table entry at i, wrapped to 0..255 (the JS table is stored twice instead).
+// texelFetch reads one texel by its whole-number position, with no filtering.
+int perm(int i) {
+  return int(texelFetch(uPerm, ivec2(i & 255, 0), 0).r * 255.0 + 0.5);
+}
+
+// fade(t) = 6t^5 - 15t^4 + 10t^3: flat at both ends, so there are no creases at the cube edges.
+float fadeCurve(float t) {
+  return t * t * t * (t * (t * 6.0 - 15.0) + 10.0);
+}
+
+// Dot product with one of 12 gradient directions, picked by the low 4 bits of the hash (as in noise.js).
+float grad(int hash, float x, float y, float z) {
+  int h = hash & 15;
+  float u = h < 8 ? x : y;
+  float v = h < 4 ? y : ((h == 12 || h == 14) ? x : z);
+  return ((h & 1) == 0 ? u : -u) + ((h & 2) == 0 ? v : -v);
+}
+
+float perlin(vec3 p) {
+  vec3 f = floor(p);
+  // Which unit cube (wrapped to 0..255; & works on negative ints too, as in JavaScript) and where inside it.
+  int X = int(f.x) & 255;
+  int Y = int(f.y) & 255;
+  int Z = int(f.z) & 255;
+  vec3 q = p - f;
+  float u = fadeCurve(q.x);
+  float v = fadeCurve(q.y);
+  float w = fadeCurve(q.z);
+  // Hash the 8 corners of the cube.
+  int A = perm(X) + Y;
+  int AA = perm(A) + Z;
+  int AB = perm(A + 1) + Z;
+  int B = perm(X + 1) + Y;
+  int BA = perm(B) + Z;
+  int BB = perm(B + 1) + Z;
+  // Blend the 8 corner values: along x, then y, then z. mix(a, b, t) is lerp(t, a, b) in noise.js.
+  float value = mix(
+    mix(mix(grad(perm(AA), q.x, q.y, q.z), grad(perm(BA), q.x - 1.0, q.y, q.z), u),
+        mix(grad(perm(AB), q.x, q.y - 1.0, q.z), grad(perm(BB), q.x - 1.0, q.y - 1.0, q.z), u), v),
+    mix(mix(grad(perm(AA + 1), q.x, q.y, q.z - 1.0), grad(perm(BA + 1), q.x - 1.0, q.y, q.z - 1.0), u),
+        mix(grad(perm(AB + 1), q.x, q.y - 1.0, q.z - 1.0), grad(perm(BB + 1), q.x - 1.0, q.y - 1.0, q.z - 1.0), u), v),
+    w);
+  return clamp(value, -1.0, 1.0);
+}
+`;
+
+// Bake, vertex shader: one square that covers the whole texture (corners -1 to 1 are its edges).
+export const groundBakeVertex = `#version 300 es
+in vec2 aCorner;
+void main() {
+  gl_Position = vec4(aCorner, 0.0, 1.0);
+}`;
+
+// Bake, fragment shader: runs once per texel of the ground texture, only when baking.
+//   uSize   the texture's size in texels (the world's size on screen, in pixels)
+//   uWorld  the world's size in world units (1600 x 900)
+export const groundBakeFragment = `#version 300 es
+precision highp float;
+precision highp int;
+uniform vec2 uSize;
+uniform vec2 uWorld;
+out vec4 outColor;
+${perlinGlsl}
+
+// Fractal noise ("fBm", fractional Brownian motion): 4 layers ("octaves") of noise, each twice as fine
+// and half as strong as the one before: big soft shapes with smaller detail on top.
+// Total strength 0.5 + 0.25 + 0.125 + 0.0625 = 0.9375. Each octave also moves to another z, so the
+// layers are not copies of each other.
+float fbm(vec2 p, float z) {
+  float sum = 0.0;
+  float amplitude = 0.5;
+  for (int i = 0; i < 4; i++) {
+    sum += amplitude * perlin(vec3(p, z));
+    p *= 2.0;
+    amplitude *= 0.5;
+    z += 17.0;
+  }
+  return sum;
+}
+
+void main() {
+  // This texel's position in the world: gl_FragCoord is the texel's center in texels, (0, 0) at the
+  // bottom left, which is the world's bottom left corner (-800, -450).
+  vec2 world = (gl_FragCoord.xy / uSize - 0.5) * uWorld;
+
+  // 1. Large patches, about 250 units across: dark olive grass mixed with dry yellow-green grass.
+  //    The fBm here is mostly between -0.23 and 0.21 (10% and 90% of the ground, measured in JavaScript).
+  vec3 olive = vec3(0.13, 0.16, 0.07);
+  vec3 dry = vec3(0.24, 0.23, 0.11);
+  float patches = smoothstep(-0.22, 0.22, fbm(world / 250.0, 0.5));
+  vec3 color = mix(olive, dry, patches);
+
+  // 2. Bare dirt spots: brown where a second fBm (another scale and place) is above about 0.185,
+  //    which is true for about 12% of the ground. The smoothstep gives them soft edges.
+  vec3 dirt = vec3(0.20, 0.14, 0.08);
+  float dirtMask = smoothstep(0.16, 0.21, fbm(world / 180.0 + vec2(31.7, -12.3), 5.5));
+  color = mix(color, dirt, dirtMask);
+
+  // 3. Fine grain, about 4 units across: plus or minus 6% brightness, so it reads as grass.
+  color *= 1.0 + 0.06 * perlin(vec3(world / 4.0, 7.3));
+
+  // 4. Up to 15% darker toward the world's border, fading out 120 units inside it.
+  float toBorder = min(uWorld.x * 0.5 - abs(world.x), uWorld.y * 0.5 - abs(world.y));
+  color *= 1.0 - 0.15 * (1.0 - smoothstep(0.0, 120.0, toBorder));
+
+  outColor = vec4(color, 1.0);
+}`;
+
+// Draw, vertex shader: places the baked texture on the world rectangle every frame.
+//   aCorner      a corner, -1 to 1
+//   uHalfWorld   half the world's size (800, 450), so the square covers the whole world
+//   vUv          texture coordinate: (0, 0) at the world's bottom left, (1, 1) at its top right
+export const groundVertex = `#version 300 es
+in vec2 aCorner;
+uniform mat3 uProjection;
+uniform vec2 uHalfWorld;
+out vec2 vUv;
+void main() {
+  vUv = aCorner * 0.5 + 0.5;
+  vec3 clip = uProjection * vec3(aCorner * uHalfWorld, 1.0);
+  gl_Position = vec4(clip.xy, 0.0, 1.0);
+}`;
+
+// Draw, fragment shader: read the baked ground texture.
+export const groundFragment = `#version 300 es
+precision mediump float;
+uniform sampler2D uGround;
+in vec2 vUv;
+out vec4 outColor;
+void main() {
+  outColor = texture(uGround, vUv);
+}`;

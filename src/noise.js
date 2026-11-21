@@ -36,12 +36,11 @@ function grad(hash, x, y, z) {
   return ((h & 1) === 0 ? u : -u) + ((h & 2) === 0 ? v : -v);
 }
 
-// Make a noise function from a seed. The same seed always gives the same noise.
-export function createNoise(seed) {
+// The numbers 0 to 255 in a random order (a Fisher-Yates shuffle) for a seed: the table the noise
+// hashes corners with. Step 10b: exported so the same table can be sent to the GPU as a small
+// texture, which makes the shader's noise (perlinGlsl in shaders.js) match this file's noise.
+export function noiseTable(seed) {
   const random = createRandom(seed);   // a bad seed (NaN, text) already acts like 0 in createRandom
-
-  // The numbers 0 to 255 in a random order (a Fisher-Yates shuffle), stored twice in a row
-  // so that perm[i + 1] never needs a wrap-around check.
   const p = new Uint8Array(256);
   for (let i = 0; i < 256; i++) p[i] = i;
   for (let i = 255; i > 0; i--) {
@@ -50,6 +49,20 @@ export function createNoise(seed) {
     p[i] = p[j];
     p[j] = tmp;
   }
+  return p;
+}
+
+// Make a noise function from a seed. The same seed always gives the same noise.
+export function createNoise(seed) {
+  return createNoiseFromTable(noiseTable(seed));
+}
+
+// Make a noise function from a shuffled table of 256 numbers (from noiseTable).
+// A broken table (wrong type or length) falls back to the seed-0 table, so the noise always works.
+export function createNoiseFromTable(table) {
+  const p = (table instanceof Uint8Array || Array.isArray(table)) && table.length === 256
+    ? table : noiseTable(0);
+  // The table stored twice in a row, so that perm[i + 1] never needs a wrap-around check.
   const perm = new Uint8Array(512);
   for (let i = 0; i < 512; i++) perm[i] = p[i & 255];
 

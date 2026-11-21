@@ -45,7 +45,7 @@ Hold the mouse button (or a finger) on the field: the wind blows from that spot 
 - Bottom bar: cleared leaves, progress, the timer (it starts with the first wind), Reset (new layout) and +100 leaves.
 - `R`: reset the scene.
 - `D`: show or hide the collision circles of the obstacles (cyan) and the leaves (white).
-- `G`: switch to the gray-box look (plain orange rectangles, as before step 10) and back, to compare.
+- `G`: switch to the gray-box look (plain orange rectangles on a flat ground, as before step 10) and back, to compare.
 - `T`: show or hide the developer panel: the live wind and the Tuning folder (friction, top speed, gusts, spin, suction, void radius, Gale distance, turn rate, build time).
 - `P`: pause and unpause the simulation.
 - `F`: hide and show the FPS counter.
@@ -61,12 +61,12 @@ src/main.js       start-up, keys, FPS display, debug handle
 src/ui.js         developer panel (Tweakpane, press T)
 src/loop.js       game loop with a clamped time step (no WebGL)
 src/physics.js    leaf movement, wind and drag, gusts, tumbling, world edges, the void, obstacles, spawning (no WebGL)
-src/noise.js      our own 3D Perlin noise for the gusts (no WebGL)
+src/noise.js      our own 3D Perlin noise for the gusts and (on the GPU) the ground (no WebGL)
 src/game.js       counter, timer, win, how many leaves +100 may add (no WebGL)
 src/control.js    mouse-aim wind: aim, turn limit, build-up (no WebGL)
 src/random.js     seeded random numbers (no WebGL)
 src/fps.js        FPS counter (no WebGL)
-src/renderer.js   WebGL setup, instanced leaves, the void, instanced obstacles and debug rings
+src/renderer.js   WebGL setup, the ground baked into a texture, instanced leaves, the void, instanced obstacles and debug rings
 src/leafmesh.js   the leaf shape: Bézier edges turned into a triangle strip (no WebGL)
 src/shaders.js    GLSL shader code
 src/math.js       our own 3x3 matrix math (no WebGL)
@@ -88,4 +88,5 @@ libs/             third-party libraries: Tweakpane 4.0.5 (MIT license)
 - [x] Step 8: mouse-aim wind (hold to blow), wind compass, Reset Scene, +100 leaves
 - [x] Step 9: obstacles (rocks and trunks) with bouncing, debug circles
 - [x] Step 10a: Bézier leaf shape and autumn colors, gray-box look on G
-- [ ] Step 10b onward: see the build order
+- [x] Step 10b: ground texture (an autumn lawn from our own noise on the GPU, baked once)
+- [ ] Step 10c onward: see the build order

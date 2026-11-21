@@ -1,8 +1,10 @@
 import {
   leafVertex, leafFragment, voidVertex, voidFragment, circleVertex, circleFragment,
+  groundBakeVertex, groundBakeFragment, groundVertex, groundFragment,
 } from './shaders.js';
 import { projection, worldRect } from './math.js';
-import { WORLD_WIDTH, WORLD_HEIGHT, LEAF_RADIUS, MAX_LEAVES } from './config.js';
+import { WORLD_WIDTH, WORLD_HEIGHT, LEAF_RADIUS, MAX_LEAVES, GROUND_SEED } from './config.js';
+import { noiseTable } from './noise.js';
 import { buildLeafMesh, buildRectMesh, FLOATS_PER_VERTEX } from './leafmesh.js';
 
 // Floats per leaf in the GPU buffer: x, y, angle, scale (step 4), fade (step 7), tint (step 10a).
@@ -56,7 +58,8 @@ function compileShader(gl, type, source) {
 }
 
 // Link a vertex shader and a fragment shader into one program the GPU can run.
-function createProgram(gl, vertexSource, fragmentSource) {
+// Exported for the tests (step 10b checks the GPU noise with a small program of its own).
+export function createProgram(gl, vertexSource, fragmentSource) {
   const vertexShader = compileShader(gl, gl.VERTEX_SHADER, vertexSource);
   let fragmentShader;
   try {
@@ -84,6 +87,22 @@ function createProgram(gl, vertexSource, fragmentSource) {
     throw new Error('Program link error: ' + log);
   }
   return program;
+}
+
+// Step 10b: send the noise's shuffled 0 to 255 table (noiseTable in noise.js) to the GPU as a 256 x 1
+// texture with one byte per texel (format R8: red only). NEAREST: never blend neighbouring entries, they
+// are table entries, not colors. The shader reads entry i with texelFetch, as value / 255.
+export function createNoiseTexture(gl, table) {
+  const texture = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);   // rows of 1-byte texels are not padded to 4 bytes
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, 256, 1, 0, gl.RED, gl.UNSIGNED_BYTE, table);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.bindTexture(gl.TEXTURE_2D, null);
+  return texture;
 }
 
 export function createRenderer(canvas) {
@@ -149,6 +168,114 @@ export function createRenderer(canvas) {
   const rectShape = leafVao(buildRectMesh());
   let grayBox = false;
 
+
+  // ---------- The ground (step 10b): baked once into a texture, drawn as one square every frame ----------
+  const bakeProgram = createProgram(gl, groundBakeVertex, groundBakeFragment);
+  const bCorner = gl.getAttribLocation(bakeProgram, 'aCorner');
+  const bSize = gl.getUniformLocation(bakeProgram, 'uSize');
+  const bWorld = gl.getUniformLocation(bakeProgram, 'uWorld');
+  const bPerm = gl.getUniformLocation(bakeProgram, 'uPerm');
+  const groundProgram = createProgram(gl, groundVertex, groundFragment);
+  const gCorner = gl.getAttribLocation(groundProgram, 'aCorner');
+  const gProjection = gl.getUniformLocation(groundProgram, 'uProjection');
+  const gHalfWorld = gl.getUniformLocation(groundProgram, 'uHalfWorld');
+  const gGround = gl.getUniformLocation(groundProgram, 'uGround');
+
+  // One square, corners -1 to 1 in triangle strip order, used by both ground programs.
+  const groundSquare = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, groundSquare);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 1, -1, -1, 1, 1, 1]), gl.STATIC_DRAW);
+  function squareVao(location) {
+    const vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+    gl.bindBuffer(gl.ARRAY_BUFFER, groundSquare);
+    gl.enableVertexAttribArray(location);
+    gl.vertexAttribPointer(location, 2, gl.FLOAT, false, 0, 0);
+    gl.bindVertexArray(null);
+    return vao;
+  }
+  const bakeVao = squareVao(bCorner);
+  const groundVao = squareVao(gCorner);
+
+  const permTexture = createNoiseTexture(gl, noiseTable(GROUND_SEED));
+  let groundTexture = null;       // the baked ground, made on the first frame that needs it
+  let groundFramebuffer = null;   // draws into groundTexture instead of onto the screen
+  let bakedWidth = 0;             // the size it was baked for, in pixels
+  let bakedHeight = 0;
+  let bakes = 0;                  // how many times it was baked (the tests check it is not every frame)
+  let groundFailed = false;       // the GPU could not draw into the texture: use the flat ground instead
+
+  // Make sure the ground texture is baked for a world that is width x height pixels on screen.
+  // Bakes only when that size changed. Returns false if baking is impossible on this GPU.
+  function bakeGround(width, height) {
+    if (groundFailed) {
+      return false;
+    }
+    const maxSize = gl.getParameter(gl.MAX_TEXTURE_SIZE);
+    const w = Math.min(maxSize, Math.max(1, Math.round(width)));
+    const h = Math.min(maxSize, Math.max(1, Math.round(height)));
+    if (groundTexture && w === bakedWidth && h === bakedHeight) {
+      return true;   // already baked at this size
+    }
+    if (!groundTexture) {
+      groundTexture = gl.createTexture();
+      groundFramebuffer = gl.createFramebuffer();
+    }
+    // (Re)size the texture: RGBA, 1 byte per channel, no starting data (null).
+    gl.bindTexture(gl.TEXTURE_2D, groundTexture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, null);
+    // LINEAR: blend the 4 nearest texels if the square is drawn a little off the pixel grid.
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+
+    // Point the framebuffer at the texture: from now on, drawing while it is bound fills the texture.
+    gl.bindFramebuffer(gl.FRAMEBUFFER, groundFramebuffer);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, groundTexture, 0);
+    if (gl.checkFramebufferStatus(gl.FRAMEBUFFER) !== gl.FRAMEBUFFER_COMPLETE) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      groundFailed = true;
+      console.warn('Could not bake the ground texture; drawing a flat ground instead.');
+      return false;
+    }
+
+    // Draw the bake square over the whole texture, one fragment per texel.
+    gl.viewport(0, 0, w, h);
+    gl.disable(gl.SCISSOR_TEST);
+    gl.disable(gl.BLEND);
+    gl.useProgram(bakeProgram);
+    gl.uniform2f(bSize, w, h);
+    gl.uniform2f(bWorld, WORLD_WIDTH, WORLD_HEIGHT);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, permTexture);
+    gl.uniform1i(bPerm, 0);   // the sampler reads texture unit 0
+    gl.bindVertexArray(bakeVao);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.bindVertexArray(null);
+
+    // Back to drawing on the screen.
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, canvas.width, canvas.height);
+    bakedWidth = w;
+    bakedHeight = h;
+    bakes++;
+    return true;
+  }
+
+  // Draw the baked ground on the world rectangle.
+  function drawGround(proj) {
+    gl.useProgram(groundProgram);
+    gl.uniformMatrix3fv(gProjection, false, proj);
+    gl.uniform2f(gHalfWorld, WORLD_WIDTH / 2, WORLD_HEIGHT / 2);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, groundTexture);
+    gl.uniform1i(gGround, 0);
+    gl.bindVertexArray(groundVao);
+    gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+    gl.bindVertexArray(null);
+  }
 
   // ---------- The void (step 7): a dark disc and a faint ring, drawn with their own small shader ----------
   // One square that covers the ring, drawn as 2 triangles. The fragment shader decides, pixel by pixel,
@@ -340,6 +467,12 @@ export function createRenderer(canvas) {
 
   function render() {
     resize();
+    const rect = worldRect(WORLD_WIDTH, WORLD_HEIGHT, canvas.width, canvas.height);
+    const hasWorld = rect.width >= 1 && rect.height >= 1;
+
+    // Step 10b: bake the ground texture first if needed (only on the first frame and after a resize),
+    // because baking draws into the texture and changes the viewport, scissor, and blending.
+    const texturedGround = hasWorld && !grayBox && bakeGround(rect.width, rect.height);
 
     // Paint the whole canvas with the bar color first.
     gl.disable(gl.SCISSOR_TEST);
@@ -348,16 +481,18 @@ export function createRenderer(canvas) {
 
     // Then paint the ground only inside the world's rectangle.
     // The scissor test limits clearing (and drawing) to a rectangle of pixels.
-    const rect = worldRect(WORLD_WIDTH, WORLD_HEIGHT, canvas.width, canvas.height);
-    if (rect.width < 1 || rect.height < 1) {
+    if (!hasWorld) {
       return;   // canvas has no size (for example a minimized window): nothing to draw
     }
     gl.enable(gl.SCISSOR_TEST);
     gl.scissor(Math.round(rect.x), Math.round(rect.y), Math.round(rect.width), Math.round(rect.height));
-    gl.clearColor(0.11, 0.08, 0.06, 1.0);    // dark brown ground
-    gl.clear(gl.COLOR_BUFFER_BIT);
-
     const proj = projection(WORLD_WIDTH, WORLD_HEIGHT, canvas.width, canvas.height);
+    if (texturedGround) {
+      drawGround(proj);                        // step 10b: the baked lawn
+    } else {
+      gl.clearColor(0.11, 0.08, 0.06, 1.0);    // gray-box look (G): flat dark brown ground
+      gl.clear(gl.COLOR_BUFFER_BIT);
+    }
 
     // Blending, so fading leaves (and the void's soft edges) mix with what is already drawn:
     //   color = source * sourceAlpha + destination * (1 - sourceAlpha)
@@ -395,5 +530,8 @@ export function createRenderer(canvas) {
     gl.bindVertexArray(null);
   }
 
-  return { gl, render, setLeaves, setVoid, setObstacles, setDebug, setGrayBox };
+  return {
+    gl, render, setLeaves, setVoid, setObstacles, setDebug, setGrayBox,
+    groundBakes: () => bakes,   // how many times the ground was baked (for tests)
+  };
 }

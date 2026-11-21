@@ -112,3 +112,6 @@ export const OBSTACLE_RESTITUTION = 0.5;
 // so no leaf can ever jump past an obstacle's middle in one step. At default settings the fastest
 // leaf moves about 38.7 units per frame, so sub-steps never happen there.
 export const MAX_STEP_DISTANCE = 40;
+
+// Step 10b: the ground texture. A fixed seed for its noise, so the ground is the same every round.
+export const GROUND_SEED = 20261120;

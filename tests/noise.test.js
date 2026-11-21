@@ -1,7 +1,7 @@
 // Step 6 Perlin noise tests. Run with:  node tests/noise.test.js
 
 import { test, assert, assertClose, report } from './harness.js';
-import { createNoise } from '../src/noise.js';
+import { createNoise, noiseTable, createNoiseFromTable } from '../src/noise.js';
 
 test('the same seed gives the same values', () => {
   const a = createNoise(7);
@@ -82,6 +82,58 @@ test('a bad seed acts like seed 0', () => {
   const zero = createNoise(0);
   for (const seed of [NaN, undefined, 'abc']) {
     assert(createNoise(seed)(1.5, 2.5, 0.5) === zero(1.5, 2.5, 0.5), `seed ${seed}`);
+  }
+});
+
+// ---------- Step 10b: the shuffled table, shared with the GPU ----------
+
+test('the step 10b refactor did not change any noise value (values saved before the change)', () => {
+  const noise = createNoise(20261119);
+  const points = [[0.5, 0.5, 0.5], [-3.7, 12.2, 0.9], [101.3, -55.5, 7.25], [0.1, -0.9, -4.4], [300.75, 200.125, 41.13]];
+  const saved = [-0.25, -0.30265359480872933, -0.05244359765624862, -0.2113245955768321, -0.037474246102524145];
+  points.forEach((p, i) => {
+    assert(noise(...p) === saved[i], `point ${i}: ${noise(...p)} vs ${saved[i]}`);
+  });
+});
+
+test('noiseTable gives the numbers 0 to 255, each once, in a shuffled order', () => {
+  const table = noiseTable(11);
+  assert(table instanceof Uint8Array && table.length === 256, 'not a 256-entry Uint8Array');
+  const seen = new Set(table);
+  assert(seen.size === 256, `${seen.size} different numbers`);
+  let inPlace = 0;
+  for (let i = 0; i < 256; i++) if (table[i] === i) inPlace++;
+  assert(inPlace < 20, `${inPlace} numbers were not moved: not shuffled`);
+});
+
+test('noiseTable: the same seed gives the same table, another seed a different one, a bad seed acts like 0', () => {
+  const a = noiseTable(11);
+  const b = noiseTable(11);
+  const c = noiseTable(12);
+  assert(a.every((v, i) => v === b[i]), 'same seed, different tables');
+  assert(a.some((v, i) => v !== c[i]), 'different seeds, same table');
+  const zero = noiseTable(0);
+  for (const seed of [NaN, undefined, 'abc']) {
+    assert(noiseTable(seed).every((v, i) => v === zero[i]), `seed ${seed}`);
+  }
+});
+
+test('createNoiseFromTable(noiseTable(seed)) is the same noise as createNoise(seed)', () => {
+  const a = createNoise(20261120);
+  const b = createNoiseFromTable(noiseTable(20261120));
+  for (let i = 0; i < 1000; i++) {
+    const x = (i * 7.31) % 211 - 100;
+    const y = (i * 3.17) % 157 - 80;
+    const z = (i * 0.37) % 9;
+    assert(a(x, y, z) === b(x, y, z), `differs at (${x}, ${y}, ${z})`);
+  }
+});
+
+test('createNoiseFromTable with a broken table falls back to the seed-0 table', () => {
+  const zero = createNoise(0);
+  for (const bad of [undefined, null, [1, 2, 3], new Uint8Array(10), 'table']) {
+    const noise = createNoiseFromTable(bad);
+    assert(noise(1.5, 2.5, 0.5) === zero(1.5, 2.5, 0.5), `table ${bad}`);
   }
 });
 
