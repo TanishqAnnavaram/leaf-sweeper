@@ -5,9 +5,10 @@
 // Step 6: noise gusts and tumbling.
 // Step 7: the void (suction, capture, removal).
 // Step 9: obstacles (bouncing, sub-steps against tunneling).
+// Step 10a: each leaf's tint (its autumn color), and the tighter collision radius of the leaf shape.
 
 import {
-  WORLD_WIDTH, WORLD_HEIGHT, LEAF_WIDTH, LEAF_HEIGHT, MAX_DT, LEAF_START,
+  WORLD_WIDTH, WORLD_HEIGHT, LEAF_RADIUS, MAX_DT, LEAF_START, TINT_SEED_OFFSET,
   MAX_LEAVES, LEAF_SEED, LEAF_SCALE_MIN, LEAF_SCALE_MAX, WIND_MAX_SPEED,
   GUST_MAX_TURN, GUST_EVOLVE, SPIN_RESPONSE, SPIN_FACTOR_MIN, SPIN_FACTOR_MAX,
   VOID_X, VOID_Y, VOID_RADIUS, SUCTION_SWIRL, CAPTURE_TIME, CAPTURE_TURNS,
@@ -15,7 +16,7 @@ import {
 } from './config.js';
 import { createRandom } from './random.js';
 
-const KEYS = ['x', 'y', 'vx', 'vy', 'angle', 'scale', 'spin', 'spinFactor', 'fade'];
+const KEYS = ['x', 'y', 'vx', 'vy', 'angle', 'scale', 'spin', 'spinFactor', 'fade', 'tint'];
 const TWO_PI = 2 * Math.PI;
 
 function isNumber(value) {
@@ -41,15 +42,15 @@ export function createLeaf(values) {
   return setLeafValues({ ...LEAF_START }, values);
 }
 
-// Radius of the smallest circle around the leaf, at any angle.
-// The rectangle's corner is (w/2, h/2) from its center, so the radius is
-//   r = sqrt((w/2)^2 + (h/2)^2) = 0.5 * sqrt(w^2 + h^2), times the scale.
+// Radius of the smallest circle around the leaf, at any angle: the farthest point of the leaf shape
+// from its center (the tip, or the stem end), which is half its length, times the scale.
+// (Before step 10a the leaf was a rectangle, and this was half its diagonal.)
 // Using a circle means the leaf stays fully inside the world even while it spins.
 export function leafRadius(scale) {
   if (!isNumber(scale)) {
     return 0;
   }
-  return 0.5 * Math.sqrt(LEAF_WIDTH * LEAF_WIDTH + LEAF_HEIGHT * LEAF_HEIGHT) * Math.abs(scale);
+  return LEAF_RADIUS * Math.abs(scale);
 }
 
 // Turn the wind settings into what stepLeaf needs. Call it once per frame, not once per leaf.
@@ -327,6 +328,8 @@ export function spawnLeaves(count, seed = LEAF_SEED, avoidRadius = VOID_RADIUS, 
   // Spin factors come from a second random stream, so adding them in step 6 did not move any leaf:
   // the positions are the same as in steps 4 and 5 for the same seed.
   const spinRandom = createRandom((isNumber(seed) ? Math.floor(seed) : 0) + 7919);
+  // Step 10a: tints come from a third stream for the same reason: adding colors moved nothing.
+  const tintRandom = createRandom((isNumber(seed) ? Math.floor(seed) : 0) + TINT_SEED_OFFSET);
   const leaves = [];
   for (let i = 0; i < n; i++) {
     // Pick the scale first, because a bigger leaf needs a bigger margin from the edge.
@@ -349,7 +352,8 @@ export function spawnLeaves(count, seed = LEAF_SEED, avoidRadius = VOID_RADIUS, 
     // Spin direction (half clockwise, half counterclockwise) and strength.
     const direction = spinRandom() < 0.5 ? -1 : 1;
     const spinFactor = direction * (SPIN_FACTOR_MIN + (SPIN_FACTOR_MAX - SPIN_FACTOR_MIN) * spinRandom());
-    leaves.push(createLeaf({ x, y, vx: 0, vy: 0, angle, scale, spin: 0, spinFactor, fade: 1 }));
+    const tint = tintRandom();   // [0, 1): picks the leaf's autumn color (see the leaf shader)
+    leaves.push(createLeaf({ x, y, vx: 0, vy: 0, angle, scale, spin: 0, spinFactor, fade: 1, tint }));
   }
   return leaves;
 }

@@ -2,23 +2,21 @@ import {
   leafVertex, leafFragment, voidVertex, voidFragment, circleVertex, circleFragment,
 } from './shaders.js';
 import { projection, worldRect } from './math.js';
-import { WORLD_WIDTH, WORLD_HEIGHT, LEAF_WIDTH, LEAF_HEIGHT, MAX_LEAVES } from './config.js';
+import { WORLD_WIDTH, WORLD_HEIGHT, LEAF_RADIUS, MAX_LEAVES } from './config.js';
+import { buildLeafMesh, buildRectMesh, FLOATS_PER_VERTEX } from './leafmesh.js';
 
-// Floats per leaf in the GPU buffer: x, y, angle, scale (step 4), plus fade (step 7).
-export const FLOATS_PER_LEAF = 5;
-
-// Collision radius of a scale-1 leaf: half its diagonal (the same as leafRadius in physics.js).
-const LEAF_RADIUS_1 = 0.5 * Math.sqrt(LEAF_WIDTH * LEAF_WIDTH + LEAF_HEIGHT * LEAF_HEIGHT);
+// Floats per leaf in the GPU buffer: x, y, angle, scale (step 4), fade (step 7), tint (step 10a).
+export const FLOATS_PER_LEAF = 6;
 
 function isNumber(value) {
   return typeof value === 'number' && Number.isFinite(value);
 }
 
-// Copy the leaves into one flat array, 5 numbers per leaf: [x0, y0, angle0, scale0, fade0, x1, ...].
+// Copy the leaves into one flat array, 6 numbers per leaf: [x0, y0, angle0, scale0, fade0, tint0, x1, ...].
 // This is the layout the GPU reads (see the aLeaf attribute below). Pure function: no WebGL.
 // Returns how many leaves were written. Leaves that do not fit in `out` are left out.
 // A leaf with a missing or non-finite value is written as all zeros: scale 0 means it is not drawn,
-// so one bad leaf can never break the frame. A missing fade means 1 (fully visible).
+// so one bad leaf can never break the frame. A missing fade means 1 (fully visible), a missing tint 0.5.
 export function packLeaves(leaves, out) {
   if (!Array.isArray(leaves)) {
     return 0;
@@ -37,6 +35,9 @@ export function packLeaves(leaves, out) {
     // Fade: 1 = solid, 0 = invisible. Kept in [0, 1]; missing or NaN counts as 1.
     const fade = ok && isNumber(leaf.fade) ? Math.min(1, Math.max(0, leaf.fade)) : 1;
     out[o + 4] = ok ? fade : 0;
+    // Tint: the leaf's color, 0 to 1. Kept in [0, 1]; missing or NaN counts as 0.5 (the middle color).
+    const tint = ok && isNumber(leaf.tint) ? Math.min(1, Math.max(0, leaf.tint)) : 0.5;
+    out[o + 5] = ok ? tint : 0;
   }
   return count;
 }
@@ -93,51 +94,60 @@ export function createRenderer(canvas) {
 
   const program = createProgram(gl, leafVertex, leafFragment);
   const aPosition = gl.getAttribLocation(program, 'aPosition');
+  const aAlong = gl.getAttribLocation(program, 'aAlong');
   const aLeaf = gl.getAttribLocation(program, 'aLeaf');
   const aFade = gl.getAttribLocation(program, 'aFade');
+  const aTint = gl.getAttribLocation(program, 'aTint');
   const uProjection = gl.getUniformLocation(program, 'uProjection');
+  const uGrayBox = gl.getUniformLocation(program, 'uGrayBox');
 
-  // The leaf shape: a rectangle centered on (0, 0), in world units.
-  // Four corners in "triangle strip" order: each new corner makes a triangle with the two before it,
-  // so 4 corners give the 2 triangles of a rectangle.
-  const hw = LEAF_WIDTH / 2;
-  const hh = LEAF_HEIGHT / 2;
-  const vertices = new Float32Array([
-    -hw, -hh,   // bottom left
-     hw, -hh,   // bottom right
-    -hw,  hh,   // top left
-     hw,  hh,   // top right
-  ]);
-
-  // A VAO remembers how both buffers are laid out, so drawing later is one bind.
-  const vao = gl.createVertexArray();
-  gl.bindVertexArray(vao);
-
-  // Buffer 1: the leaf shape, shared by every leaf.
-  const shapeBuffer = gl.createBuffer();
-  gl.bindBuffer(gl.ARRAY_BUFFER, shapeBuffer);
-  gl.bufferData(gl.ARRAY_BUFFER, vertices, gl.STATIC_DRAW);   // STATIC = never changes
-  gl.enableVertexAttribArray(aPosition);
-  gl.vertexAttribPointer(aPosition, 2, gl.FLOAT, false, 0, 0);  // 2 floats per corner
-
-  // Buffer 2: per-leaf data, 5 floats per leaf. Made once at full size (MAX_LEAVES leaves = 200 KB),
+  // Per-leaf data, 6 floats per leaf. Made once at full size (MAX_LEAVES leaves = 240 KB),
   // then refilled every frame. DYNAMIC = "we will change this often", a hint for the driver.
   const leafData = new Float32Array(MAX_LEAVES * FLOATS_PER_LEAF);
   const leafBuffer = gl.createBuffer();
   gl.bindBuffer(gl.ARRAY_BUFFER, leafBuffer);
   gl.bufferData(gl.ARRAY_BUFFER, leafData.byteLength, gl.DYNAMIC_DRAW);
-  // Each leaf's 5 floats sit side by side, so the "stride" (bytes from one leaf to the next) is 5 * 4 = 20.
-  // aLeaf reads the first 4 floats (offset 0) as a vec4, aFade the 5th float (offset 16 bytes).
-  const stride = FLOATS_PER_LEAF * 4;
-  gl.enableVertexAttribArray(aLeaf);
-  gl.vertexAttribPointer(aLeaf, 4, gl.FLOAT, false, stride, 0);
-  gl.enableVertexAttribArray(aFade);
-  gl.vertexAttribPointer(aFade, 1, gl.FLOAT, false, stride, 16);
-  // The key lines for instancing: divisor 1 means "move to the next leaf's values once per leaf (instance)",
-  // instead of once per corner (divisor 0, the default, as for aPosition).
-  gl.vertexAttribDivisor(aLeaf, 1);
-  gl.vertexAttribDivisor(aFade, 1);
-  gl.bindVertexArray(null);
+
+  // Turn on one attribute and say where its numbers are. A location of -1 means the shader does not
+  // use that input, so there is nothing to set up.
+  function attribute(location, size, stride, offset, divisor) {
+    if (location < 0) {
+      return;
+    }
+    gl.enableVertexAttribArray(location);
+    gl.vertexAttribPointer(location, size, gl.FLOAT, false, stride, offset);
+    gl.vertexAttribDivisor(location, divisor);
+  }
+
+  // One VAO per leaf shape. A VAO remembers how both buffers are laid out, so drawing later is one bind.
+  //   Buffer 1: the shape (mesh), shared by every leaf. 3 floats per vertex: x, y, along,
+  //             so the "stride" (bytes from one vertex to the next) is 12. Divisor 0: once per vertex.
+  //   Buffer 2: the per-leaf data. Each leaf's 6 floats sit side by side: stride 6 * 4 = 24 bytes.
+  //             aLeaf reads floats 0 to 3 as a vec4, aFade float 4 (byte 16), aTint float 5 (byte 20).
+  //             Divisor 1, the key line for instancing: move to the next leaf's values once per leaf
+  //             (instance), instead of once per vertex.
+  function leafVao(mesh) {
+    const vao = gl.createVertexArray();
+    gl.bindVertexArray(vao);
+    const shapeBuffer = gl.createBuffer();
+    gl.bindBuffer(gl.ARRAY_BUFFER, shapeBuffer);
+    gl.bufferData(gl.ARRAY_BUFFER, mesh.vertices, gl.STATIC_DRAW);   // STATIC = never changes
+    const vs = FLOATS_PER_VERTEX * 4;
+    attribute(aPosition, 2, vs, 0, 0);
+    attribute(aAlong, 1, vs, 8, 0);
+    gl.bindBuffer(gl.ARRAY_BUFFER, leafBuffer);
+    const ls = FLOATS_PER_LEAF * 4;
+    attribute(aLeaf, 4, ls, 0, 1);
+    attribute(aFade, 1, ls, 16, 1);
+    attribute(aTint, 1, ls, 20, 1);
+    gl.bindVertexArray(null);
+    return { vao, count: mesh.count };
+  }
+
+  // Step 10a: the Bézier leaf (26 vertices) and, for the G key, the gray-box rectangle (4 corners).
+  const leafShape = leafVao(buildLeafMesh());
+  const rectShape = leafVao(buildRectMesh());
+  let grayBox = false;
 
 
   // ---------- The void (step 7): a dark disc and a faint ring, drawn with their own small shader ----------
@@ -273,6 +283,11 @@ export function createRenderer(canvas) {
     debug = Boolean(on);
   }
 
+  // Gray-box look on or off (G key): orange rectangles as in steps 2 to 9, or the step 10a leaves.
+  function setGrayBox(on) {
+    grayBox = Boolean(on);
+  }
+
   // Filled obstacles, then (in debug view) the outlines. Called after the leaves are drawn.
   function drawCircles(proj) {
     if (obstacleCount === 0 && !(debug && leafCount > 0)) {
@@ -293,7 +308,7 @@ export function createRenderer(canvas) {
     }
     if (debug && leafCount > 0) {
       gl.bindVertexArray(leafRingVao);
-      gl.uniform1f(cLeafRadius, LEAF_RADIUS_1);
+      gl.uniform1f(cLeafRadius, LEAF_RADIUS);
       gl.uniform1f(cOutline, 1);
       gl.uniform4f(cOutlineColor, 1.0, 1.0, 1.0, 0.55);   // white: leaf collision circles
       gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, leafCount);
@@ -371,11 +386,14 @@ export function createRenderer(canvas) {
     // Draw every leaf with ONE call. The scissor stays on, so a leaf can never be drawn over the bars.
     gl.useProgram(program);
     gl.uniformMatrix3fv(uProjection, false, proj);
-    gl.bindVertexArray(vao);
-    // 4 corners as a strip = 2 triangles per leaf, repeated for leafCount leaves.
-    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, 4, leafCount);
+    gl.uniform1f(uGrayBox, grayBox ? 1 : 0);
+    const shape = grayBox ? rectShape : leafShape;
+    gl.bindVertexArray(shape.vao);
+    // The shape's vertices as one strip (24 triangles for the leaf, 2 for the rectangle),
+    // repeated for leafCount leaves.
+    gl.drawArraysInstanced(gl.TRIANGLE_STRIP, 0, shape.count, leafCount);
     gl.bindVertexArray(null);
   }
 
-  return { gl, render, setLeaves, setVoid, setObstacles, setDebug };
+  return { gl, render, setLeaves, setVoid, setObstacles, setDebug, setGrayBox };
 }

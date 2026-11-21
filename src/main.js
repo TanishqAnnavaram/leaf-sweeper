@@ -42,6 +42,7 @@ try {
   const renderer = createRenderer(canvas);
   renderer.setObstacles(OBSTACLES);   // they never move, so they are sent to the GPU once
   let debugView = false;              // D: collision circles of obstacles and leaves
+  let grayBoxView = false;            // G: the gray-box look (orange rectangles), for comparison
   let leaves = spawnLeaves(LEAF_COUNT, LEAF_SEED);   // 1000 still leaves, same layout every load
   let game = createGame(leaves.length);              // counter, timer, win
   let round = 0;          // each reset uses a new seed, so each round has a new layout
@@ -273,7 +274,7 @@ try {
 
   // ---------- Keys ----------
   // P pauses, F shows or hides the FPS counter, T the developer panel, R resets the scene,
-  // D shows or hides the collision circles.
+  // D shows or hides the collision circles, G switches to the gray-box look of steps 2 to 9 and back.
   window.addEventListener('keydown', (e) => {
     // Ignore held keys, and keys typed into a text box (the developer panel has number boxes).
     if (e.repeat || (e.target instanceof HTMLElement && e.target.closest('input, textarea'))) {
@@ -290,6 +291,9 @@ try {
     } else if (e.code === 'KeyD') {
       debugView = !debugView;
       renderer.setDebug(debugView);
+    } else if (e.code === 'KeyG') {
+      grayBoxView = !grayBoxView;
+      renderer.setGrayBox(grayBoxView);
     }
   });
 

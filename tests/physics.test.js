@@ -8,7 +8,7 @@ import {
 } from '../src/physics.js';
 import { createNoise } from '../src/noise.js';
 import {
-  WORLD_WIDTH, WORLD_HEIGHT, LEAF_WIDTH, LEAF_HEIGHT, MAX_DT, LEAF_START,
+  WORLD_WIDTH, WORLD_HEIGHT, LEAF_RADIUS, MAX_DT, LEAF_START,
   LEAF_COUNT, MAX_LEAVES, LEAF_SEED, LEAF_SCALE_MIN, LEAF_SCALE_MAX,
   FRICTION, WIND_MAX_SPEED, WIND_START,
   GUST_STRENGTH, GUST_SIZE, GUST_MAX_TURN, SPIN_AMOUNT, SPIN_FACTOR_MIN, SPIN_FACTOR_MAX,
@@ -17,8 +17,9 @@ import {
 const TOL = 1e-9;
 const HALF_W = WORLD_WIDTH / 2;    // 800
 const HALF_H = WORLD_HEIGHT / 2;   // 450
-// Radius of the circle around a scale-1 leaf: half its diagonal, about 23.32 units.
-const R1 = 0.5 * Math.sqrt(LEAF_WIDTH * LEAF_WIDTH + LEAF_HEIGHT * LEAF_HEIGHT);
+// Radius of the circle around a scale-1 leaf. Step 10a: the farthest point of the leaf shape from its
+// center, which is half its length (16 units), instead of half the old rectangle's diagonal.
+const R1 = LEAF_RADIUS;
 
 function leafAt(values) {
   return createLeaf({ x: 0, y: 0, vx: 0, vy: 0, angle: 0, scale: 1, ...values });
@@ -72,7 +73,8 @@ test('setLeafValues ignores NaN, Infinity, strings, and missing input', () => {
 
 // ---------- leafRadius ----------
 
-test('leafRadius at scale 1 is half the leaf diagonal (about 23.32)', () => {
+test('leafRadius at scale 1 is half the leaf length (16)', () => {
+  assert(R1 === 16, `LEAF_RADIUS ${R1}`);
   assertClose(leafRadius(1), R1, TOL, 'radius');
 });
 
@@ -157,7 +159,7 @@ test('one second at 30, 60, and 144 steps per second ends at the same place', ()
 // ---------- Stop at the world edge ----------
 
 test('stops at the right wall: x clamped, vx zeroed, vy kept', () => {
-  const leaf = leafAt({ x: 775, y: 0, vx: 200, vy: 50 });
+  const leaf = leafAt({ x: 780, y: 0, vx: 200, vy: 50 });
   stepLeaf(leaf, 1 / 30);
   assertClose(leaf.x, HALF_W - R1, TOL, 'x');
   assert(leaf.vx === 0, `vx ${leaf.vx}`);
@@ -165,21 +167,21 @@ test('stops at the right wall: x clamped, vx zeroed, vy kept', () => {
 });
 
 test('stops at the left wall', () => {
-  const leaf = leafAt({ x: -775, y: 0, vx: -200, vy: 50 });
+  const leaf = leafAt({ x: -780, y: 0, vx: -200, vy: 50 });
   stepLeaf(leaf, 1 / 30);
   assertClose(leaf.x, -(HALF_W - R1), TOL, 'x');
   assert(leaf.vx === 0 && leaf.vy === 50, `velocity (${leaf.vx}, ${leaf.vy})`);
 });
 
 test('stops at the top wall', () => {
-  const leaf = leafAt({ x: 0, y: 425, vx: 40, vy: 200 });
+  const leaf = leafAt({ x: 0, y: 430, vx: 40, vy: 200 });
   stepLeaf(leaf, 1 / 30);
   assertClose(leaf.y, HALF_H - R1, TOL, 'y');
   assert(leaf.vy === 0 && leaf.vx === 40, `velocity (${leaf.vx}, ${leaf.vy})`);
 });
 
 test('stops at the bottom wall', () => {
-  const leaf = leafAt({ x: 0, y: -425, vx: 40, vy: -200 });
+  const leaf = leafAt({ x: 0, y: -430, vx: 40, vy: -200 });
   stepLeaf(leaf, 1 / 30);
   assertClose(leaf.y, -(HALF_H - R1), TOL, 'y');
   assert(leaf.vy === 0 && leaf.vx === 40, `velocity (${leaf.vx}, ${leaf.vy})`);
@@ -194,12 +196,12 @@ test('slides along a wall and stops in the corner', () => {
 });
 
 test('the start values reach the top wall after about 6 seconds', () => {
-  // y goes from -300 to 450 - 23.32 = 426.68 at 120 units/s: 726.68 / 120 = 6.06 s.
+  // y goes from -300 to 450 - 16 = 434 at 120 units/s: 734 / 120 = 6.12 s.
   const leaf = createLeaf();
   for (let i = 0; i < 60 * 6; i++) stepLeaf(leaf, 1 / 60);
   assert(leaf.vy === 120, 'stopped before 6 s');
-  for (let i = 0; i < 6; i++) stepLeaf(leaf, 1 / 60);
-  assert(leaf.vy === 0, 'not stopped at 6.1 s');
+  for (let i = 0; i < 8; i++) stepLeaf(leaf, 1 / 60);   // to 6.13 s
+  assert(leaf.vy === 0, 'not stopped at 6.13 s');
   assert(leaf.vx === 200, 'still sliding to the right');
 });
 
@@ -754,9 +756,11 @@ test('the sign of spinFactor sets the spin direction', () => {
 });
 
 test('spin dies out within about 3 s after the wind stops', () => {
-  const leaf = run(spinner({ x: -600 }), gusty({ strength: 0, spin: 1 }), 1);
+  // Spin amount 2 * SPIN_AMOUNT: exactly 1 before step 10a, and the same tumbling with the new radius.
+  const amount = 2 * SPIN_AMOUNT;
+  const leaf = run(spinner({ x: -600 }), gusty({ strength: 0, spin: amount }), 1);
   const spinning = Math.abs(leaf.spin);
-  run(leaf, gusty({ speed: 0, spin: 1 }), 3);
+  run(leaf, gusty({ speed: 0, spin: amount }), 3);
   // Under 0.3 rad/s is less than one turn every 20 s: still to the eye.
   assert(Math.abs(leaf.spin) < 0.3, `spin ${leaf.spin} after 3 s of Calm (was ${spinning})`);
   assert(Math.abs(leaf.spin) < spinning / 20, 'spin did not die out');

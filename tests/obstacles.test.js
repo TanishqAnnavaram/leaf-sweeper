@@ -79,7 +79,7 @@ test('the obstacle list cannot be changed by accident (frozen)', () => {
 const ROCK = { x: 0, y: 0, radius: 40, kind: 'rock' };
 
 test('an overlapping leaf is pushed out to exactly touching', () => {
-  const leaf = leafAt({ x: 50, y: 0 });   // 50 from the center; touching would be 40 + 23.3
+  const leaf = leafAt({ x: 50, y: 0 });   // 50 from the center; touching would be 40 + 16
   resolveObstacles(leaf, [ROCK]);
   assertClose(gap(leaf, ROCK), 0, 1e-9, 'gap');
   assertClose(leaf.y, 0, 1e-9, 'pushed straight out');
